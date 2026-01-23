@@ -246,7 +246,9 @@ local function score_files(files, target_season, target_episode, entry_matches_s
         
         local is_ep_match, offset_found = check_offset_match(file_episode, target_episode)
         
-        write_log("File: " .. fname .. " | S:" .. tostring(file_season) .. " E:" .. tostring(file_episode))
+        local is_ep_match, offset_found = check_offset_match(file_episode, target_episode)
+        
+        local score_breakdown = {}
         
         if target_episode and file_episode then
             if target_season and file_season then
@@ -254,14 +256,16 @@ local function score_files(files, target_season, target_episode, entry_matches_s
                     if is_ep_match then
                         if offset_found == 0 then
                             score = score + 1000 -- Perfect
+                            table.insert(score_breakdown, "Perfect Match (+1000)")
                         else
                             score = score + 850 -- Offset Match (e.g. 14 vs 02)
-                            write_log("  -> Offset Match (Offset: " .. offset_found .. ")")
+                            table.insert(score_breakdown, "Offset Match " .. offset_found .. " (+850)")
                         end
                     end
                 end
             elseif is_ep_match and entry_matches_season then
                 score = score + 800 -- Implied season match
+                table.insert(score_breakdown, "Implied Season Match (+800)")
             end
         end
         
@@ -276,8 +280,13 @@ local function score_files(files, target_season, target_episode, entry_matches_s
 
             if fname:lower():match(pattern) then
                 score = score + boost
-                write_log("  -> Preferred Pattern Match: " .. pattern .. " (+" .. boost .. ")")
+                table.insert(score_breakdown, "Pattern '" .. pattern .. "' (+" .. boost .. ")")
             end
+        end
+        
+        write_log("File: " .. fname .. " | S:" .. tostring(file_season) .. " E:" .. tostring(file_episode) .. " | Score: " .. score)
+        if #score_breakdown > 0 then
+             write_log("  -> " .. table.concat(score_breakdown, ", "))
         end
         
         table.insert(scored_files, {file = file, score = score})
@@ -304,7 +313,10 @@ local function auto_load_subs()
     for _, q in ipairs(queries) do
         write_log("Searching: " .. q)
         entries = make_api_request(JIMAKU_API_SEARCH .. "?query=" .. q:gsub(" ", "+") .. "&anime=true")
-        if entries and #entries > 0 then break end
+        if entries and #entries > 0 then 
+            write_log("Found " .. #entries .. " entries for query: " .. q)
+            break 
+        end
     end
     
     if not entries or #entries == 0 then
