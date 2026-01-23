@@ -10,6 +10,12 @@ local DEBUG = false
 local LOG_FILE = CONFIG_DIR .. "/jimaku-debug.log"
 local JIMAKU_API_KEY = "" -- Optional: set your API key here.When left empty, the script will read the key from 'jimaku-api-key.txt' located in MPV's config directory (it's one level above the 'scripts' folder).
 local COMMON_OFFSETS = {12, 13, 11, 24, 25, 26, 48, 50, 51, 52}
+local JIMAKU_PREFERRED_PATTERNS = {
+    "netflix", 
+    "amazon",
+    -- Example of custom score boost (default is 50):
+    -- {"sdh", 200},  -- Strong preference for SDH
+}
 
 local function write_log(message)
     local log = io.open(LOG_FILE, "a")
@@ -256,8 +262,20 @@ local function select_best_file(files, target_season, target_episode, entry_matc
             end
         end
         
-        if fname:lower():match("netflix") then score = score + 50 end
-        if fname:lower():match("amazon") then score = score + 50 end
+        for _, entry in ipairs(JIMAKU_PREFERRED_PATTERNS) do
+            local pattern = entry
+            local boost = 50
+            
+            if type(entry) == "table" then
+                pattern = entry[1]
+                boost = entry[2] or 50
+            end
+
+            if fname:lower():match(pattern) then
+                score = score + boost
+                write_log("  -> Preferred Pattern Match: " .. pattern .. " (+" .. boost .. ")")
+            end
+        end
         
         table.insert(scored_files, {file = file, score = score})
     end
