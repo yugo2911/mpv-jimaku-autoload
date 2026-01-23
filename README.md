@@ -73,7 +73,7 @@ The script will:
 - download the best subtitle file  
 - load it automatically  
 
-(not really) You can also trigger a manual search with:
+(not yet implemented) You can also trigger a manual search with:
 
 ```
 Ctrl + j
