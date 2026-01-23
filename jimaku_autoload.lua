@@ -11,9 +11,9 @@ local LOG_FILE = CONFIG_DIR .. "/jimaku-debug.log"
 local JIMAKU_API_KEY = "" -- Optional: set your API key here.When left empty, the script will read the key from 'jimaku-api-key.txt' located in MPV's config directory (it's one level above the 'scripts' folder).
 local COMMON_OFFSETS = {12, 13, 11, 24, 25, 26, 48, 50, 51, 52}
 local JIMAKU_PREFERRED_PATTERNS = {
-    {"netflix", 200}, 
-    {"amazon", 200},
-    {"webrip", 200},
+    -- {"netflix", 200}, 
+    -- {"amazon", 200},
+    -- {"webrip", 200},
     -- Example of custom score boost (default is 50):
     -- {"sdh", 200},  -- Strong preference for SDH
 }
@@ -95,98 +95,127 @@ local function make_api_request(url)
     return data
 end
 
--- Extracts S/E and returns the start index of the match (to cut the title)
-local function extract_season_episode_info(clean_name)
+-- Parse video filename to extract title, episode, and season
+local function parse_filename(filename)
+    local name = filename:gsub("^.*[/\\]", ""):gsub("%.%w+$", "")
+    local clean = name:gsub("%[.-%]", ""):gsub("%(.-%)", ""):gsub("%{.-%}", "")
+    
     local season, episode = nil, nil
     local match_start = nil
 
-    -- 1. Try to find SEASON first
+    -- Extract season
     local season_patterns = {
-        { pat = "[Ss]eason%s*0*(%d+)", offset = 0 },
-        { pat = "[Ss]0*(%d+)[Ee]%d+", offset = 0 },
-        { pat = "%sS0*(%d+)%s*%-", offset = 0 },
-        { pat = "%.S0*(%d+)E", offset = 0 },
-        { pat = "%sS0*(%d+)%s", offset = 0 },
-        { pat = "%-S0*(%d+)%-", offset = 0 },
+        "[Ss]eason%s*0*(%d+)",
+        "[Ss]0*(%d+)[Ee]%d+",
+        "%sS0*(%d+)%s*%-",
+        "%.S0*(%d+)E",
+        "%sS0*(%d+)%s",
+        "%-S0*(%d+)%-",
+        "[Pp]art%s*0*(%d+)",
+        "[Cc]our%s*0*(%d+)",
     }
     
-    for _, item in ipairs(season_patterns) do
-        local s, e, cap = clean_name:find(item.pat)
+    for _, pattern in ipairs(season_patterns) do
+        local s, e, cap = clean:find(pattern)
         if s then
             season = cap
-            match_start = s -- Record where the season info started
+            match_start = s
             break
         end
     end
 
-    -- 2. Try to find EPISODE
+    -- Extract episode
     local episode_patterns = {
         "[Ee]pisode%s*0*(%d+)",
         "[Ss]%d+[Ee]0*(%d+)",
-        "%s%-+%s*0*(%d+)%s*$", -- " - 02" at end
-        "%s%-+%s*0*(%d+)%s",   -- " - 02 "
+        "%s%-+%s*0*(%d+)%s*$",
+        "%s%-+%s*0*(%d+)%s",
         "^[#]?0*(%d+)%s",
         "[Ee]0*(%d+)",
         "%s0*(%d+)%s*v%d",
     }
     
     for _, pattern in ipairs(episode_patterns) do
-        local s, e, cap = clean_name:find(pattern)
+        local s, e, cap = clean:find(pattern)
         if s then
             episode = cap
-            -- If we found an episode earlier than the season (rare) or no season found, update cutoff
             if not match_start or s < match_start then
                 match_start = s
             end
-            
-            -- Sanity check: if single digit episode equals season, ignore unless it's clearly an episode pattern
             if season and tonumber(episode) == tonumber(season) and not pattern:find("[Ee]") then
-                 -- Ambiguous, keep looking
+                -- Ambiguous, keep looking
             else
                 break
             end
         end
     end
 
-    return tonumber(season), tonumber(episode), match_start
-end
-
-local function parse_filename(filename)
-    -- Remove path and extension
-    local name = filename:gsub("^.*[/\\]", ""):gsub("%.%w+$", "")
-    -- Remove brackets content immediately as it's usually metadata (Source, Resolution)
-    local clean = name:gsub("%[.-%]", ""):gsub("%(.-%)", ""):gsub("%{.-%}", "")
-    
-    local season, episode, match_index = extract_season_episode_info(clean)
     local title = clean
     
-    -- CRITICAL FIX: If we found S/E info, cut the title string AT that point.
-    -- This discards "Day Tripping...", "1080p", etc. that come after.
-    if match_index and match_index > 1 then
-        title = clean:sub(1, match_index - 1)
+    if match_start and match_start > 1 then
+        title = clean:sub(1, match_start - 1)
     end
     
-    -- Clean up the resulting title
-    title = title:gsub("[:%-_%.]", " ") -- dots/underscores to spaces
-    title = title:gsub("%sS%d+$", "")   -- Remove trailing " S2" if cut missed it
-    title = title:gsub("%s%d+[nr]d%s+[Ss]eason", "") -- Remove " 2nd Season"
-    title = title:gsub("%s+", " ")       -- Collapse spaces
+    title = title:gsub("[:%-_%.]", " ")
+    title = title:gsub("%sS%d+$", "")
+    title = title:gsub("%s%d+[nr]d%s+[Ss]eason", "")
+    title = title:gsub("%s+", " ")
     title = trim(title)
     
     debug_log("Parsed Video - Title: [" .. title .. "] | S: " .. tostring(season) .. " | E: " .. tostring(episode))
-    return title, episode, season
+    return title, tonumber(episode), tonumber(season)
+end
+
+-- Parse subtitle filename to extract season and episode
+local function parse_subtitle_filename(filename)
+    local fname = filename:lower()
+    
+    local file_season = fname:match("s0*(%d+)e0*(%d+)") 
+    local file_episode = nil
+    
+    if file_season then
+        file_season, file_episode = fname:match("s0*(%d+)e0*(%d+)")
+        file_season = tonumber(file_season)
+        file_episode = tonumber(file_episode)
+    else
+        file_season = fname:match("season%s*0*(%d+)") or fname:match("%.s0*(%d+)%.") or fname:match("[Pp]art%s*0*(%d+)") or fname:match("[Cc]our%s*0*(%d+)")
+        file_episode = fname:match("e0*(%d+)") or fname:match("ep0*(%d+)") or fname:match("%s%-?%s*0*(%d+)%.")
+        
+        file_season = file_season and tonumber(file_season)
+        file_episode = file_episode and tonumber(file_episode)
+    end
+    
+    return file_season, file_episode
 end
 
 local function validate_season_match(entry, target_season)
     if not target_season then return true end
     local full_name = ((entry.name or "") .. " " .. (entry.english_name or "")):lower()
     
-    if full_name:find("season%s*0*" .. target_season) or full_name:find("s0*" .. target_season) or
-       full_name:find(" " .. target_season .. "nd%s+season") then
-        return true
+    local patterns = {
+        "season%s*0*" .. target_season .. "%D",
+        "s0*" .. target_season .. "[%s:]",
+        "s0*" .. target_season .. "$",
+        "%s" .. target_season .. "nd%s+season",
+        "%s" .. target_season .. "rd%s+season",
+        "%s" .. target_season .. "th%s+season",
+        "part%s*0*" .. target_season,
+        "cour%s*0*" .. target_season,
+    }
+    
+    for _, pattern in ipairs(patterns) do
+        if full_name:find(pattern) then
+            debug_log("✓ Season match with pattern: " .. pattern)
+            return true
+        end
     end
     
-    if target_season == 1 and not full_name:find("season") and not full_name:find("s%d") then return true end
+    if target_season == 1 and not full_name:find("season%s*%d") and not full_name:find("s%d") and not full_name:find("part%s*%d") then 
+        debug_log("✓ Assuming S1 (no season indicator)")
+        return true 
+    end
+    
+    debug_log("✗ No season match")
     return false
 end
 
@@ -196,7 +225,12 @@ local function score_entry(entry, title, season)
     local entry_eng = (entry.english_name or ""):lower()
     local title_lower = title:lower()
     
-    -- Simple word matching
+    -- Exact match bonus
+    if entry_name == title_lower or entry_eng == title_lower then
+        score = score + 100
+    end
+    
+    -- Word matching
     local matches = 0
     local words = 0
     for word in title_lower:gmatch("%S+") do
@@ -213,7 +247,11 @@ local function score_entry(entry, title, season)
     end
     
     local is_season_match = validate_season_match(entry, season)
-    if is_season_match then score = score + 200 elseif season then score = score - 150 end
+    if is_season_match then 
+        score = score + 200 
+    elseif season then 
+        score = score - 150 
+    end
     
     return score, is_season_match
 end
@@ -222,7 +260,6 @@ local function check_offset_match(file_ep, target_ep)
     if not file_ep or not target_ep then return false, 0 end
     if file_ep == target_ep then return true, 0 end
     
-    -- Check diff (Absolute numbering handling)
     local diff = file_ep - target_ep
     for _, offset in ipairs(COMMON_OFFSETS) do
         if diff == offset then return true, offset end
@@ -230,6 +267,7 @@ local function check_offset_match(file_ep, target_ep)
     return false, 0
 end
 
+-- Smart file selection with clear scoring tiers
 local function score_files(files, target_season, target_episode, entry_matches_season)
     if not files or #files == 0 then return {} end
     
@@ -239,36 +277,66 @@ local function score_files(files, target_season, target_episode, entry_matches_s
     for i, file in ipairs(files) do
         local score = 0
         local fname = file.name
-        local file_season, file_episode, _ = extract_season_episode_info(fname)
+        local fname_lower = fname:lower()
+        
+        -- Parse subtitle filename
+        local file_season, file_episode = parse_subtitle_filename(fname)
         
         -- Fallback: inherit season from entry
-        if entry_matches_season and not file_season then file_season = target_season end
+        if entry_matches_season and not file_season then 
+            file_season = target_season 
+        end
         
-        local is_ep_match, offset_found = check_offset_match(file_episode, target_episode)
-        
-        local is_ep_match, offset_found = check_offset_match(file_episode, target_episode)
+        write_log("File: " .. fname .. " | S:" .. tostring(file_season) .. " E:" .. tostring(file_episode))
         
         local score_breakdown = {}
+        local is_ep_match, offset_found = check_offset_match(file_episode, target_episode)
         
-        if target_episode and file_episode then
-            if target_season and file_season then
-                if file_season == target_season then
-                    if is_ep_match then
-                        if offset_found == 0 then
-                            score = score + 1000 -- Perfect
-                            table.insert(score_breakdown, "Perfect Match (+1000)")
-                        else
-                            score = score + 850 -- Offset Match (e.g. 14 vs 02)
-                            table.insert(score_breakdown, "Offset Match " .. offset_found .. " (+850)")
-                        end
-                    end
+        -- TIER 1: Perfect match (1000)
+        if target_season and target_episode and file_season and file_episode then
+            if file_season == target_season and file_episode == target_episode then
+                score = score + 1000
+                table.insert(score_breakdown, "Perfect Match (+1000)")
+            elseif is_ep_match and offset_found > 0 then
+                score = score + 850
+                table.insert(score_breakdown, "Offset Match " .. offset_found .. " (+850)")
+            elseif file_episode == target_episode then
+                score = score + 500
+                table.insert(score_breakdown, "Episode match, season mismatch (+500)")
+            end
+        end
+        
+        -- TIER 2: Episode-only match (750)
+        if target_episode and file_episode and not (target_season and file_season) then
+            if is_ep_match then
+                if offset_found == 0 then
+                    score = score + 750
+                    table.insert(score_breakdown, "Episode match, no season data (+750)")
+                else
+                    score = score + 700
+                    table.insert(score_breakdown, "Episode offset match, no season data (+700)")
                 end
-            elseif is_ep_match and entry_matches_season then
-                score = score + 800 -- Implied season match
+            end
+        end
+        
+        -- TIER 3: Implied season match (800)
+        if is_ep_match and entry_matches_season and not file_season then
+            if score < 800 then -- Don't override higher scores
+                score = score + 800
                 table.insert(score_breakdown, "Implied Season Match (+800)")
             end
         end
         
+        -- Format preferences
+        if fname_lower:match("%.srt$") then
+            score = score + 100
+            table.insert(score_breakdown, ".srt format (+100)")
+        elseif fname_lower:match("%.ass$") then
+            score = score + 50
+            table.insert(score_breakdown, ".ass format (+50)")
+        end
+        
+        -- Pattern matching bonuses
         for _, entry in ipairs(JIMAKU_PREFERRED_PATTERNS) do
             local pattern = entry
             local boost = 50
@@ -278,13 +346,25 @@ local function score_files(files, target_season, target_episode, entry_matches_s
                 boost = entry[2] or 50
             end
 
-            if fname:lower():match(pattern) then
+            if fname_lower:match(pattern) then
                 score = score + boost
                 table.insert(score_breakdown, "Pattern '" .. pattern .. "' (+" .. boost .. ")")
             end
         end
         
-        write_log("File: " .. fname .. " | S:" .. tostring(file_season) .. " E:" .. tostring(file_episode) .. " | Score: " .. score)
+        -- Quality indicators
+        if fname_lower:match("fixed") or fname_lower:match("retimed") then
+            score = score + 20
+            table.insert(score_breakdown, "Fixed/retimed (+20)")
+        end
+        
+        -- Penalties
+        if fname_lower:match("draft") or fname_lower:match("wip") then
+            score = score - 50
+            table.insert(score_breakdown, "Draft/WIP (-50)")
+        end
+        
+        write_log("  Score: " .. score)
         if #score_breakdown > 0 then
              write_log("  -> " .. table.concat(score_breakdown, ", "))
         end
@@ -304,29 +384,64 @@ local function auto_load_subs()
 
     local title, episode, season = parse_filename(filename)
     
-    -- Strategy 1: Title + Season (e.g. "Vigilante 2")
+    -- Multiple search strategies
     local queries = {}
-    if season then table.insert(queries, title .. " " .. season) end
-    table.insert(queries, title) -- Strategy 2: Base Title
     
-    local entries = nil
-    for _, q in ipairs(queries) do
-        write_log("Searching: " .. q)
-        entries = make_api_request(JIMAKU_API_SEARCH .. "?query=" .. q:gsub(" ", "+") .. "&anime=true")
+    -- Core title (first 2 words)
+    local core_title = title:match("([^%s]+%s+[^%s]+)") or title
+    if core_title ~= title then
+        table.insert(queries, {query = core_title, desc = "Core title"})
+    end
+    
+    -- Base title
+    table.insert(queries, {query = title, desc = "Base title"})
+    
+    -- Season variations
+    if season then
+        table.insert(queries, {query = title .. " season " .. season, desc = "Title + season"})
+        table.insert(queries, {query = title .. " part " .. season, desc = "Title + part"})
+        table.insert(queries, {query = title .. " " .. season, desc = "Title + number"})
+    end
+    
+    write_log("\nSearch strategies: " .. #queries)
+    for i, q in ipairs(queries) do
+        write_log("  " .. i .. ". " .. q.desc .. ": [" .. q.query .. "]")
+    end
+    
+    -- Aggregate results from all searches
+    local all_entries = {}
+    local seen_ids = {}
+    
+    for _, query_data in ipairs(queries) do
+        write_log("\nSearching: " .. query_data.query)
+        local entries = make_api_request(JIMAKU_API_SEARCH .. "?query=" .. query_data.query:gsub(" ", "+") .. "&anime=true")
+        
         if entries and #entries > 0 then 
-            write_log("Found " .. #entries .. " entries for query: " .. q)
-            break 
+            write_log("Found " .. #entries .. " entries")
+            for _, entry in ipairs(entries) do
+                if not seen_ids[entry.id] then
+                    seen_ids[entry.id] = true
+                    table.insert(all_entries, entry)
+                end
+            end
+        end
+        
+        if #all_entries >= 10 then
+            write_log("Sufficient entries found, stopping search")
+            break
         end
     end
     
-    if not entries or #entries == 0 then
+    if #all_entries == 0 then
         write_log("No entries found")
         mp.osd_message("Jimaku: No results", 3)
         return
     end
     
+    write_log("Total unique entries: " .. #all_entries)
+    
     local scored_entries = {}
-    for _, entry in ipairs(entries) do
+    for _, entry in ipairs(all_entries) do
         local score, is_season_match = score_entry(entry, title, season)
         if score > -50 then
             table.insert(scored_entries, {entry = entry, score = score, match = is_season_match})
@@ -336,22 +451,30 @@ local function auto_load_subs()
     
     local all_candidates = {}
     
-    for i = 1, math.min(5, #scored_entries) do -- Check top 5 entries
+    -- Check top 3 entries
+    for i = 1, math.min(3, #scored_entries) do
         local item = scored_entries[i]
-        write_log("Checking Entry: " .. (item.entry.name or "Unknown"))
+        write_log("\nChecking Entry " .. i .. ": " .. (item.entry.name or "Unknown") .. " (score: " .. item.score .. ")")
         
         local files = make_api_request(JIMAKU_API_DOWNLOAD .. "/" .. item.entry.id .. "/files")
-        local entry_scores = score_files(files, season, episode, item.match)
         
-        for _, c in ipairs(entry_scores) do
-            if c.score >= 700 then
-                 table.insert(all_candidates, c)
+        if files and #files > 0 then
+            write_log("  Found " .. #files .. " files")
+            local entry_scores = score_files(files, season, episode, item.match)
+            
+            for _, c in ipairs(entry_scores) do
+                table.insert(all_candidates, c)
             end
         end
     end
     
     table.sort(all_candidates, function(a, b) return a.score > b.score end)
     
+    write_log("\n--- RANKED FILES (Top " .. math.min(10, #all_candidates) .. ") ---")
+    for i = 1, math.min(10, #all_candidates) do
+        write_log(i .. ". [Score: " .. all_candidates[i].score .. "] " .. all_candidates[i].file.name)
+    end
+
     -- Smart Filter: If we have perfect matches (Score >= 1000), discard anything less (e.g. Offset matches ~850)
     if #all_candidates > 0 then
         local best_score = all_candidates[1].score
@@ -367,14 +490,18 @@ local function auto_load_subs()
         end
     end
 
+    -- Select best files with fallback
     local final_files = {}
     local seen_urls = {}
     
     for _, item in ipairs(all_candidates) do
         if #final_files >= JIMAKU_MAX_SUBS then break end
         if not seen_urls[item.file.url] then
-            table.insert(final_files, item.file)
-            seen_urls[item.file.url] = true
+            -- Accept files with any positive score, or best file as fallback
+            if item.score > 0 or #final_files == 0 then
+                table.insert(final_files, item.file)
+                seen_urls[item.file.url] = true
+            end
         end
     end
     
@@ -382,8 +509,6 @@ local function auto_load_subs()
         mp.osd_message("Jimaku: Downloading " .. #final_files .. " subs...", 2)
         local API_KEY = get_api_key()
         
-        -- Create cache directory if it doesn't exist
-        -- Use cmd /c mkdir for Windows support (fails silently if exists or we ignore code)
         mp.command_native({
             name = "subprocess", 
             args = {"cmd", "/c", "mkdir", CACHE_SUB_DIR:gsub("/", "\\")},
@@ -391,24 +516,26 @@ local function auto_load_subs()
         })
 
         for i, f in ipairs(final_files) do
-             write_log("Downloading ("..i.."): " .. f.name)
+             write_log("\n✓ Downloading (" .. i .. "): " .. f.name)
              
-             -- Use original filename in cache directory
              local sub_path = CACHE_SUB_DIR .. "/" .. f.name
              local args = { "curl", "-s", "-o", sub_path, "-H", "Authorization: " .. API_KEY, f.url }
              
              local res = mp.command_native({name = "subprocess", args = args})
              if res.status == 0 then
-                 -- Add as track
                  mp.commandv("sub-add", sub_path, i == 1 and "select" or "auto", f.name)
+                 write_log("  ✓ Loaded and " .. (i == 1 and "selected" or "added"))
+             else
+                 write_log("  ✗ Download failed")
              end
         end
         mp.osd_message("Jimaku: Loaded " .. #final_files .. " subs", 3)
     else
-        write_log("No suitable subtitle file found.")
+        write_log("\n✗ No suitable subtitle file found")
         mp.osd_message("Jimaku: No matching file", 3)
     end
-    write_log("SESSION END")
+    write_log("\nSESSION END")
+    write_log(string.rep("=", 60))
 end
 
 mp.register_event("file-loaded", auto_load_subs)
