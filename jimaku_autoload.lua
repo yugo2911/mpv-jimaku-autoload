@@ -6,7 +6,7 @@ local JIMAKU_API_BASE = "https://jimaku.cc/api"
 local JIMAKU_API_SEARCH = JIMAKU_API_BASE .. "/entries/search"
 local JIMAKU_API_DOWNLOAD = JIMAKU_API_BASE .. "/entries"
 local CONFIG_DIR = mp.command_native({"expand-path", "~~/"})
-local DEBUG = false  
+local DEBUG = true  
 local LOG_FILE = CONFIG_DIR .. "/jimaku-debug.log"
 local JIMAKU_API_KEY = "" -- Optional: set your API key here.When left empty, the script will read the key from 'jimaku-api-key.txt' located in MPV's config directory (it's one level above the 'scripts' folder).
 local COMMON_OFFSETS = {12, 13, 11, 24, 25, 26, 48, 50, 51, 52}
@@ -16,6 +16,7 @@ local JIMAKU_PREFERRED_PATTERNS = {
     -- Example of custom score boost (default is 50):
     -- {"sdh", 200},  -- Strong preference for SDH
 }
+local JIMAKU_MAX_SUBS = 3 -- Maximum number of subtitles to download and load
 
 local function write_log(message)
     local log = io.open(LOG_FILE, "a")
@@ -227,8 +228,8 @@ local function check_offset_match(file_ep, target_ep)
     return false, 0
 end
 
-local function select_best_file(files, target_season, target_episode, entry_matches_season)
-    if not files or #files == 0 then return nil end
+local function score_files(files, target_season, target_episode, entry_matches_season)
+    if not files or #files == 0 then return {} end
     
     write_log("\n--- SCORING " .. #files .. " FILES ---")
     local scored_files = {}
@@ -280,12 +281,7 @@ local function select_best_file(files, target_season, target_episode, entry_matc
         table.insert(scored_files, {file = file, score = score})
     end
     
-    table.sort(scored_files, function(a, b) return a.score > b.score end)
-    
-    if scored_files[1] and scored_files[1].score >= 700 then
-        return scored_files[1].file
-    end
-    return nil
+    return scored_files
 end
 
 local function auto_load_subs()
@@ -324,31 +320,53 @@ local function auto_load_subs()
     end
     table.sort(scored_entries, function(a, b) return a.score > b.score end)
     
-    local best_file = nil
-    for i = 1, math.min(3, #scored_entries) do
+    local all_candidates = {}
+    
+    for i = 1, math.min(5, #scored_entries) do -- Check top 5 entries
         local item = scored_entries[i]
         write_log("Checking Entry: " .. (item.entry.name or "Unknown"))
         
         local files = make_api_request(JIMAKU_API_DOWNLOAD .. "/" .. item.entry.id .. "/files")
-        best_file = select_best_file(files, season, episode, item.match)
+        local entry_scores = score_files(files, season, episode, item.match)
         
-        if best_file then break end
+        for _, c in ipairs(entry_scores) do
+            if c.score >= 700 then
+                 table.insert(all_candidates, c)
+            end
+        end
     end
     
-    if best_file then
-        write_log("Downloading: " .. best_file.name)
-        mp.osd_message("Jimaku: Downloading...", 2)
-        
+    table.sort(all_candidates, function(a, b) return a.score > b.score end)
+    
+    local final_files = {}
+    local seen_urls = {}
+    
+    for _, item in ipairs(all_candidates) do
+        if #final_files >= JIMAKU_MAX_SUBS then break end
+        if not seen_urls[item.file.url] then
+            table.insert(final_files, item.file)
+            seen_urls[item.file.url] = true
+        end
+    end
+    
+    if #final_files > 0 then
+        mp.osd_message("Jimaku: Downloading " .. #final_files .. " subs...", 2)
         local API_KEY = get_api_key()
         
-        local sub_path = CONFIG_DIR .. "/jimaku-temp.srt"
-        local args = { "curl", "-s", "-o", sub_path, "-H", "Authorization: " .. API_KEY, best_file.url }
-        
-        mp.command_native({name = "subprocess", args = args})
-        
-        -- CORRECT NAMING: Use 'select' and the original filename as the title
-        mp.commandv("sub-add", sub_path, "select", best_file.name)
-        mp.osd_message("Jimaku: Loaded " .. best_file.name, 3)
+        for i, f in ipairs(final_files) do
+             write_log("Downloading ("..i.."): " .. f.name)
+             
+             -- Unique temp path for each file
+             local sub_path = CONFIG_DIR .. "/jimaku-temp-" .. i .. ".srt"
+             local args = { "curl", "-s", "-o", sub_path, "-H", "Authorization: " .. API_KEY, f.url }
+             
+             local res = mp.command_native({name = "subprocess", args = args})
+             if res.status == 0 then
+                 -- Add as track
+                 mp.commandv("sub-add", sub_path, i == 1 and "select" or "auto", f.name)
+             end
+        end
+        mp.osd_message("Jimaku: Loaded " .. #final_files .. " subs", 3)
     else
         write_log("No suitable subtitle file found.")
         mp.osd_message("Jimaku: No matching file", 3)
