@@ -13,10 +13,12 @@ local COMMON_OFFSETS = {12, 13, 11, 24, 25, 26, 48, 50, 51, 52}
 local JIMAKU_PREFERRED_PATTERNS = {
     "netflix", 
     "amazon",
+    "webrip",
     -- Example of custom score boost (default is 50):
     -- {"sdh", 200},  -- Strong preference for SDH
 }
-local JIMAKU_MAX_SUBS = 3 -- Maximum number of subtitles to download and load
+local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load
+local CACHE_SUB_DIR = CONFIG_DIR .. "/subtitle-cache"
 
 local function write_log(message)
     local log = io.open(LOG_FILE, "a")
@@ -338,6 +340,21 @@ local function auto_load_subs()
     
     table.sort(all_candidates, function(a, b) return a.score > b.score end)
     
+    -- Smart Filter: If we have perfect matches (Score >= 1000), discard anything less (e.g. Offset matches ~850)
+    if #all_candidates > 0 then
+        local best_score = all_candidates[1].score
+        if best_score >= 1000 then
+            local filtered = {}
+            for _, c in ipairs(all_candidates) do
+                if c.score >= 1000 then
+                    table.insert(filtered, c)
+                end
+            end
+            all_candidates = filtered
+            write_log("Smart Filter: Kept " .. #all_candidates .. " perfect matches (discarded lower scores)")
+        end
+    end
+
     local final_files = {}
     local seen_urls = {}
     
@@ -353,11 +370,19 @@ local function auto_load_subs()
         mp.osd_message("Jimaku: Downloading " .. #final_files .. " subs...", 2)
         local API_KEY = get_api_key()
         
+        -- Create cache directory if it doesn't exist
+        -- Use cmd /c mkdir for Windows support (fails silently if exists or we ignore code)
+        mp.command_native({
+            name = "subprocess", 
+            args = {"cmd", "/c", "mkdir", CACHE_SUB_DIR:gsub("/", "\\")},
+            playback_only = false
+        })
+
         for i, f in ipairs(final_files) do
              write_log("Downloading ("..i.."): " .. f.name)
              
-             -- Unique temp path for each file
-             local sub_path = CONFIG_DIR .. "/jimaku-temp-" .. i .. ".srt"
+             -- Use original filename in cache directory
+             local sub_path = CACHE_SUB_DIR .. "/" .. f.name
              local args = { "curl", "-s", "-o", sub_path, "-H", "Authorization: " .. API_KEY, f.url }
              
              local res = mp.command_native({name = "subprocess", args = args})
