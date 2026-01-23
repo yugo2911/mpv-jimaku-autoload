@@ -11,9 +11,9 @@ local LOG_FILE = CONFIG_DIR .. "/jimaku-debug.log"
 local JIMAKU_API_KEY = "" -- Optional: set your API key here.When left empty, the script will read the key from 'jimaku-api-key.txt' located in MPV's config directory (it's one level above the 'scripts' folder).
 local COMMON_OFFSETS = {12, 13, 11, 24, 25, 26, 48, 50, 51, 52}
 local JIMAKU_PREFERRED_PATTERNS = {
-    "netflix", 
-    "amazon",
-    "webrip",
+    {"netflix", 200}, 
+    {"amazon", 200},
+    {"webrip", 200},
     -- Example of custom score boost (default is 50):
     -- {"sdh", 200},  -- Strong preference for SDH
 }
