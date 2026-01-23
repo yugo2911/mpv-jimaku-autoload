@@ -73,7 +73,7 @@ The script will:
 - download the best subtitle file  
 - load it automatically  
 
-(not yet implemented) You can also trigger a manual search with:
+(not yet really implemented) You can also trigger a manual search with:
 
 ```
 Ctrl + j
@@ -92,7 +92,7 @@ Useful for troubleshooting or improving the matching logic.
 
 ---
 
-#  **MPV Directory Structure (Text Tree)**
+#  **MPV Directory Structure**
 
 Below is a clear directory tree showing where everything belongs. If there is no script folder just create it mpv should detect it
 
