@@ -94,7 +94,7 @@ Useful for troubleshooting or improving the matching logic.
 
 #  **MPV Directory Structure**
 
-Below is a clear directory tree showing where everything belongs. If there is no script folder just create it mpv should detect it
+Below is a clear directory tree showing where everything belongs. If there is no scripts folder just create it mpv should detect it
 
 ```
 mpv/
