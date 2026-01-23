@@ -1,4 +1,4 @@
--- Jimaku Subtitle Auto-loader for MPV - CLEAN TITLE & OFFSET FIXED VERSION
+-- Jimaku Subtitle Auto-loader for MPV
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
 
@@ -8,8 +8,7 @@ local JIMAKU_API_DOWNLOAD = JIMAKU_API_BASE .. "/entries"
 local CONFIG_DIR = mp.command_native({"expand-path", "~~/"})
 local DEBUG = false  
 local LOG_FILE = CONFIG_DIR .. "/jimaku-debug.log"
-
--- Common episode offsets to check (prev season lengths: 12, 13, 24, etc.)
+local JIMAKU_API_KEY = "" -- Optional: set your API key here.When left empty, the script will read the key from 'jimaku-api-key.txt' located in MPV's config directory (it's one level above the 'scripts' folder).
 local COMMON_OFFSETS = {12, 13, 11, 24, 25, 26, 48, 50, 51, 52}
 
 local function write_log(message)
@@ -29,16 +28,28 @@ end
 
 local function trim(s) return s:match("^%s*(.-)%s*$") end
 
+local function get_api_key()
+    if JIMAKU_API_KEY and JIMAKU_API_KEY ~= "" then
+        return JIMAKU_API_KEY
+    end
+    
+    local key_file = io.open(CONFIG_DIR .. "/jimaku-api-key.txt", "r")
+    if key_file then
+        local key = key_file:read("*all"):gsub("%s+", "")
+        key_file:close()
+        return key
+    end
+    return nil
+end
+
 local function make_api_request(url)
     debug_log("API Request: " .. url)
     
-    local key_file = io.open(CONFIG_DIR .. "/jimaku-api-key.txt", "r")
-    if not key_file then 
-        write_log("[ERROR] API key file not found at: " .. CONFIG_DIR .. "/jimaku-api-key.txt")
+    local API_KEY = get_api_key()
+    if not API_KEY then 
+        write_log("[ERROR] API key not found. Set JIMAKU_API_KEY in script or create " .. CONFIG_DIR .. "/jimaku-api-key.txt")
         return nil 
     end
-    local API_KEY = key_file:read("*all"):gsub("%s+", "")
-    key_file:close()
 
     local header_file = os.tmpname()
     local args = { "curl", "-s", "-i", "--dump-header", header_file, 
@@ -246,7 +257,7 @@ local function select_best_file(files, target_season, target_episode, entry_matc
         end
         
         if fname:lower():match("netflix") then score = score + 50 end
-        if fname:lower():match("%.srt$") then score = score + 100 end
+        if fname:lower():match("amazon") then score = score + 50 end
         
         table.insert(scored_files, {file = file, score = score})
     end
@@ -310,9 +321,7 @@ local function auto_load_subs()
         write_log("Downloading: " .. best_file.name)
         mp.osd_message("Jimaku: Downloading...", 2)
         
-        local key_file = io.open(CONFIG_DIR .. "/jimaku-api-key.txt", "r")
-        local API_KEY = key_file:read("*all"):gsub("%s+", "")
-        key_file:close()
+        local API_KEY = get_api_key()
         
         local sub_path = CONFIG_DIR .. "/jimaku-temp.srt"
         local args = { "curl", "-s", "-o", sub_path, "-H", "Authorization: " .. API_KEY, best_file.url }
