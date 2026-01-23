@@ -1,4 +1,4 @@
-# WIP
+# WIP DOES NOT WORK FOR YET~
 ---
 ## **Jimaku Subtitle Auto‑Loader for MPV**
 A Lua script for MPV that automatically detects the correct anime title, season, and episode from your video filename, queries the Jimaku.cc API, scores available subtitle files, and loads the best match automatically.
