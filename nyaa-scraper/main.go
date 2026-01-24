@@ -4,12 +4,27 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/gocolly/colly/v2"
 )
 
+var videoExt = []string{
+	".mkv", ".mp4", ".avi", ".mov", ".wmv",
+	".flv", ".webm", ".mpg", ".mpeg",
+}
+
+func isVideo(title string) bool {
+	lower := strings.ToLower(title)
+	for _, ext := range videoExt {
+		if strings.Contains(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
-	// Output file
 	file, err := os.Create("torrents.txt")
 	if err != nil {
 		log.Fatalf("Failed to create file: %v", err)
@@ -18,13 +33,13 @@ func main() {
 
 	c := colly.NewCollector(
 		colly.UserAgent("Mozilla/5.0"),
-		colly.AllowedDomains("nyaa.land"),
+		colly.AllowedDomains("www.tokyo-tosho.net", "tokyo-tosho.net"),
 	)
 
-	// Extract torrent names
-	c.OnHTML("table tbody tr", func(e *colly.HTMLElement) {
-		title := e.ChildText("td:nth-child(2) a[href^='/view']")
-		if title != "" {
+	// Extract full torrent names
+	c.OnHTML("td.desc-top a", func(e *colly.HTMLElement) {
+		title := e.Text
+		if title != "" && isVideo(title) {
 			file.WriteString(title + "\n")
 			fmt.Println(title)
 		}
@@ -34,16 +49,12 @@ func main() {
 		log.Printf("Error: %v", err)
 	})
 
-	// Loop pages manually
-	const maxPages = 10 // change this to whatever you want
+	const maxPages = 300
 
 	for page := 1; page <= maxPages; page++ {
-		url := fmt.Sprintf("https://nyaa.land/?f=0&c=1_0&q=&p=%d", page)
+		url := fmt.Sprintf("https://www.tokyo-tosho.net/?cat=1&page=%d", page)
 		fmt.Println("Visiting:", url)
-		err := c.Visit(url)
-		if err != nil {
-			log.Printf("Visit error: %v", err)
-		}
+		_ = c.Visit(url)
 		c.Wait()
 	}
 }
