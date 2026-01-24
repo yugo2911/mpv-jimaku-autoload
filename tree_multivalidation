@@ -1,0 +1,35 @@
+Torrent Parser
+ ├── Parse filename
+ │     ├── Title → "Jujutsu Kaisen"
+ │     └── Episode → 51
+ ├── Normalize title
+ │     ├── Remove group tags
+ │     ├── Normalize punctuation
+ │     └── Result → "Jujutsu Kaisen"
+ ├── Multi‑API Title Resolution
+ │     ├── Query AniList(title)
+ │     ├── Query AniDB(title)
+ │     ├── Query Kitsu(title)
+ │     ├── Query TVDB(title)
+ │     └── Merge:
+ │           ├── Canonical romaji title
+ │           ├── All known synonyms
+ │           └── All known season entries
+ ├── Season Boundary Construction
+ │     ├── AniList → TV seasons + episode counts
+ │     ├── AniDB → specials, recaps, offsets
+ │     ├── TVDB → absolute numbering
+ │     ├── LiveChart → airing order
+ │     └── Build unified season map:
+ │           ├── S1: eps 1–24
+ │           ├── S2: eps 25–48
+ │           └── S3: eps 49–72
+ ├── Episode Classification
+ │     ├── Check if ep=51 is:
+ │           ├── TV episode (AniList)
+ │           ├── Not a special (AniDB)
+ │           ├── Valid absolute number (TVDB)
+ │           └── Airing in correct timeframe (LiveChart)
+ │     └── Result → Season 3, Episode 51
+ ├── Extract AniList ID for Season 3
+ └── Query Jimaku using AniList ID + episode
