@@ -231,6 +231,27 @@ local function parse_filename(filename)
             end
         end
     end
+    
+    -- Clean up subtitle artifacts for better AniList matching
+    -- First, remove parenthetical content (often Japanese duplicates or extra info)
+    title = title:gsub("%s*%([^%)]+%)", "")
+    title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    
+    -- Remove arc/part names that come after main title (common pattern: "Title - Subtitle - Part")
+    if title:match("^(.-)%s+%-%s+") then
+        local base_title = title:match("^(.-)%s+%-%s+")
+        -- Check if what follows looks like an arc name (Japanese text, Part, Zenpen, etc.)
+        local subtitle = title:match("^.-%s+%-%s+(.+)$")
+        if subtitle and (subtitle:match("[一-龯ぁ-んァ-ン]") or -- Japanese characters
+                        subtitle:lower():match("part") or 
+                        subtitle:lower():match("hen$") or  -- Common arc suffix
+                        subtitle:lower():match("zenpen") or
+                        subtitle:lower():match("kouhen") or
+                        subtitle:lower():match("special")) then
+            title = base_title
+            title = title:gsub("%s+$", "")
+        end
+    end
 
     local result = {
         title = title,
@@ -424,9 +445,24 @@ local function search_anilist()
         local season_num = parsed.season or 1
         local found_smart_match = false
         local actual_episode = episode_num
+        
+        -- Check if this is a special episode based on parsed data
+        local is_special_ep = parsed.is_special
 
-        -- Check if parsed season number indicates we should look for a sequel
-        if season_num >= 2 then
+        -- Priority 1: Match SPECIAL/OVA format if detected as special
+        if is_special_ep and not found_smart_match then
+            for i, media in ipairs(results) do
+                if media.format == "SPECIAL" or media.format == "OVA" or media.format == "ONA" then
+                    selected = media
+                    found_smart_match = true
+                    debug_log(string.format("Special Match: Detected %s format for special episode", media.format))
+                    break
+                end
+            end
+        end
+
+        -- Priority 2: Check if parsed season number indicates we should look for a sequel
+        if not found_smart_match and season_num >= 2 then
             -- User has S2/S3 in filename - search for matching season entry
             for i, media in ipairs(results) do
                 local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
@@ -451,7 +487,7 @@ local function search_anilist()
             end
         end
 
-        -- Fallback: If episode number exceeds first result's episode count, try cumulative calculation
+        -- Priority 3: Fallback - If episode number exceeds first result's episode count, try cumulative calculation
         if not found_smart_match and episode_num > (selected.episodes or 0) then
             -- Build chronological season list by finding season markers
             local seasons = {}
