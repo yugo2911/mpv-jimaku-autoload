@@ -211,11 +211,18 @@ local function parse_filename(filename)
     -- Title - Episode (Standard HyZen/Saizen with underscores)
     if not title then
         title, episode = raw_content:match("^(.-)%s*%-%s*(%d+)")
+        -- Mark as continuous numbering (no explicit season in filename)
+        if title and episode then
+            season = nil  -- Don't assume S1 for continuous numbering
+        end
     end
 
     -- Underscore fallback: Title_-_Episode_
     if not title then
         title, episode = raw_content:match("^(.-)%_?%-%_?(%d+)")
+        if title and episode then
+            season = nil  -- Don't assume S1 for continuous numbering
+        end
     end
 
     -- Movie style with Year (Title 2014)
@@ -302,17 +309,17 @@ local function parse_filename(filename)
 
     local result = {
         title = title,
-        season = tonumber(season) or 1,
+        season = tonumber(season),  -- Can be nil for continuous numbering
         episode = episode or "1",
         quality = quality or "unknown",
         is_special = is_special(episode, raw_content),
         group = release_group
     }
 
-    debug_log(string.format("Parsed: [%s] S%02d E%s | %s", 
+    debug_log(string.format("Parsed: [%s] %s E%s | %s", 
         result.title, 
-        result.season, 
-        result.episode, 
+        result.season and string.format("S%02d", result.season) or "Continuous",
+        result.episode or "?", 
         original_raw))
 
     return result
@@ -618,13 +625,18 @@ local function search_anilist()
         local results = data.Page.media
         local selected = results[1] -- Start with best search match
         
-        debug_log(string.format("Analyzing %d potential matches for '%s' S%d E%s...", #results, parsed.title, parsed.season, parsed.episode))
+        debug_log(string.format("Analyzing %d potential matches for '%s' %sE%s...", 
+            #results, 
+            parsed.title, 
+            parsed.season and string.format("S%d ", parsed.season) or "",
+            parsed.episode))
 
         -- SMART SELECTION & CUMULATIVE EPISODE LOGIC
         local episode_num = tonumber(parsed.episode) or 1
-        local season_num = parsed.season or 1
+        local season_num = parsed.season  -- Can be nil for continuous numbering
         local found_smart_match = false
         local actual_episode = episode_num
+        local actual_season = 1
         
         -- Check if this is a special episode based on parsed data
         local is_special_ep = parsed.is_special
@@ -642,7 +654,7 @@ local function search_anilist()
         end
 
         -- Priority 2: Check if parsed season number indicates we should look for a sequel
-        if not found_smart_match and season_num >= 2 then
+        if not found_smart_match and season_num and season_num >= 2 then
             -- User has S2/S3 in filename - search for matching season entry
             for i, media in ipairs(results) do
                 local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
@@ -661,14 +673,15 @@ local function search_anilist()
                     selected = media
                     found_smart_match = true
                     actual_episode = episode_num
+                    actual_season = season_num
                     debug_log(string.format("Smart Match: Matched S%d via parsed season number", season_num))
                     break
                 end
             end
         end
 
-        -- Priority 3: Fallback - If episode number exceeds first result's episode count, try cumulative calculation
-        if not found_smart_match and episode_num > (selected.episodes or 0) then
+        -- Priority 3: Fallback - If episode number exceeds first result's episode count OR no explicit season, try cumulative calculation
+        if not found_smart_match and (not season_num or episode_num > (selected.episodes or 0)) then
             -- Build chronological season list by finding season markers
             local seasons = {}
             
@@ -726,6 +739,7 @@ local function search_anilist()
                     if episode_num <= cumulative + season_eps then
                         selected = seasons[season_idx].media
                         actual_episode = episode_num - cumulative
+                        actual_season = season_idx
                         found_smart_match = true
                         debug_log(string.format("Cumulative Match: Ep %d -> %s (Season %d, Episode %d)", 
                             episode_num, selected.title.romaji, season_idx, actual_episode))
@@ -734,6 +748,11 @@ local function search_anilist()
                     cumulative = cumulative + season_eps
                 end
             end
+        end
+        
+        -- If no cumulative match but we have a season number from parsing, use it
+        if not found_smart_match and season_num then
+            actual_season = season_num
         end
 
         -- Final reporting with Type/Format
@@ -751,7 +770,7 @@ local function search_anilist()
         mp.osd_message(string.format("AniList Match: %s\nID: %s | S%d E%d\nFormat: %s | Total Eps: %s", 
             selected.title.romaji, 
             selected.id,
-            season_num,
+            actual_season,
             actual_episode,
             selected.format or "TV",
             selected.episodes or "?"), 5)
