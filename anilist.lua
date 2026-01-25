@@ -220,8 +220,15 @@ local function parse_filename(filename)
             title = title:gsub("[Ss]eason%s+%d+", "")
             title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
         else
-            -- Last resort: check for S1, S2 pattern in title
-            season = title:match("[%s%.%_][Ss](%d+)")
+            -- Check for title ending in space + single digit (e.g. "Anime Title 2")
+            local temp_season = title:match("%s+(%d)$")
+            if temp_season and tonumber(temp_season) >= 2 and tonumber(temp_season) <= 9 then
+                season = temp_season
+                title = title:gsub("%s+%d$", "")
+            else
+                -- Last resort: check for S1, S2 pattern in title
+                season = title:match("[%s%.%_][Ss](%d+)")
+            end
         end
     end
 
