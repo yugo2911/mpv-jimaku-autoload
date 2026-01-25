@@ -37,6 +37,7 @@ local LOG_ONLY_ERRORS = false
 
 -- Jimaku configuration
 local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
+local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
 
 -- Jimaku API key (will be loaded from file)
 local JIMAKU_API_KEY = ""
@@ -777,6 +778,14 @@ if not STANDALONE_MODE then
     -- Keybind 'A' to trigger the search
     mp.add_key_binding("A", "anilist-search", search_anilist)
     
-    -- Initial log entry
-    debug_log("AniList Script Initialized. Press 'A' to search current file.")
+    -- Auto-download subtitles on file load if enabled
+    if JIMAKU_AUTO_DOWNLOAD then
+        mp.register_event("file-loaded", function()
+            -- Small delay to ensure file is ready
+            mp.add_timeout(0.5, search_anilist)
+        end)
+        debug_log("AniList Script Initialized with auto-download enabled. Press 'A' to manually search.")
+    else
+        debug_log("AniList Script Initialized. Press 'A' to search current file.")
+    end
 end
