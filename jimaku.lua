@@ -479,7 +479,13 @@ local function download_subtitle(entry_id, episode_num, anime_title)
         return false
     end
     
-    debug_log(string.format("Found %d subtitle file(s) for episode %d", #files, episode_num))
+    debug_log(string.format("Found %d subtitle file(s) for episode %d:", #files, episode_num))
+    
+    -- Log all available subtitle files
+    for i, file in ipairs(files) do
+        local size_kb = math.floor(file.size / 1024)
+        debug_log(string.format("  [%d] %s (%d KB)", i, file.name, size_kb))
+    end
     
     -- Download first matching subtitle
     local subtitle_file = files[1]
