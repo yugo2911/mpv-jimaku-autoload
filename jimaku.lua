@@ -79,7 +79,15 @@ local function ensure_subtitle_cache()
     if STANDALONE_MODE then
         os.execute("mkdir -p " .. SUBTITLE_CACHE_DIR)
     else
-        os.execute("mkdir -p \"" .. SUBTITLE_CACHE_DIR .. "\"")
+        -- Use mpv's subprocess to avoid CMD window flash on Windows
+        local is_windows = package.config:sub(1,1) == '\\'
+        local args = is_windows and {"cmd", "/C", "mkdir", SUBTITLE_CACHE_DIR} or {"mkdir", "-p", SUBTITLE_CACHE_DIR}
+        
+        mp.command_native({
+            name = "subprocess",
+            playback_only = false,
+            args = args
+        })
     end
 end
 
