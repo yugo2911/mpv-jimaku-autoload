@@ -35,6 +35,9 @@ end
 -- Parser configuration
 local LOG_ONLY_ERRORS = false
 
+-- Jimaku configuration
+local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
+
 -- Jimaku API key (will be loaded from file)
 local JIMAKU_API_KEY = ""
 
@@ -487,33 +490,51 @@ local function download_subtitle(entry_id, episode_num, anime_title)
         debug_log(string.format("  [%d] %s (%d KB)", i, file.name, size_kb))
     end
     
-    -- Download first matching subtitle
-    local subtitle_file = files[1]
-    local subtitle_path = SUBTITLE_CACHE_DIR .. "/" .. subtitle_file.name
+    -- Determine how many subtitles to download
+    local max_downloads = #files
+    if JIMAKU_MAX_SUBS ~= "all" and type(JIMAKU_MAX_SUBS) == "number" then
+        max_downloads = math.min(JIMAKU_MAX_SUBS, #files)
+    end
     
-    debug_log("Downloading: " .. subtitle_file.name .. " (" .. subtitle_file.size .. " bytes)")
+    debug_log(string.format("Downloading %d of %d available subtitle(s)...", max_downloads, #files))
     
-    -- Download the file
-    local download_args = {
-        "curl", "-s", "-L", "-o", subtitle_path,
-        "-H", "Authorization: " .. JIMAKU_API_KEY,
-        subtitle_file.url
-    }
+    local success_count = 0
     
-    local download_result = mp.command_native({
-        name = "subprocess",
-        playback_only = false,
-        args = download_args
-    })
+    -- Download and load subtitles
+    for i = 1, max_downloads do
+        local subtitle_file = files[i]
+        local subtitle_path = SUBTITLE_CACHE_DIR .. "/" .. subtitle_file.name
+        
+        debug_log(string.format("Downloading [%d/%d]: %s (%d bytes)", i, max_downloads, subtitle_file.name, subtitle_file.size))
+        
+        -- Download the file
+        local download_args = {
+            "curl", "-s", "-L", "-o", subtitle_path,
+            "-H", "Authorization: " .. JIMAKU_API_KEY,
+            subtitle_file.url
+        }
+        
+        local download_result = mp.command_native({
+            name = "subprocess",
+            playback_only = false,
+            args = download_args
+        })
+        
+        if download_result.status == 0 then
+            -- Load subtitle into mpv
+            mp.commandv("sub-add", subtitle_path)
+            debug_log(string.format("Successfully loaded subtitle [%d/%d]: %s", i, max_downloads, subtitle_file.name))
+            success_count = success_count + 1
+        else
+            debug_log(string.format("Failed to download subtitle [%d/%d]: %s", i, max_downloads, subtitle_file.name), true)
+        end
+    end
     
-    if download_result.status == 0 then
-        -- Load subtitle into mpv
-        mp.commandv("sub-add", subtitle_path)
-        debug_log("Successfully loaded subtitle: " .. subtitle_file.name)
-        mp.osd_message(string.format("✓ Subtitle loaded: %s", subtitle_file.name), 4)
+    if success_count > 0 then
+        mp.osd_message(string.format("✓ Loaded %d subtitle(s)", success_count), 4)
         return true
     else
-        debug_log("Failed to download subtitle", true)
+        debug_log("Failed to download any subtitles", true)
         return false
     end
 end
