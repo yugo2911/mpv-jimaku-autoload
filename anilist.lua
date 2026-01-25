@@ -279,35 +279,105 @@ local function search_anilist()
         local results = data.Page.media
         local selected = results[1] -- Start with best search match
         
-        debug_log(string.format("Analyzing %d potential matches for '%s' (E%s)...", #results, parsed.title, parsed.episode))
+        debug_log(string.format("Analyzing %d potential matches for '%s' S%d E%s...", #results, parsed.title, parsed.season, parsed.episode))
 
         -- SMART SELECTION & CUMULATIVE EPISODE LOGIC
         local episode_num = tonumber(parsed.episode) or 1
+        local season_num = parsed.season or 1
         local found_smart_match = false
+        local actual_episode = episode_num
 
-        -- Filter for TV shows or likely sequels to calculate cumulative offsets
-        if episode_num > (selected.episodes or 0) then
-            -- Try Keyword Match first (S2, S3, etc)
+        -- Check if parsed season number indicates we should look for a sequel
+        if season_num >= 2 then
+            -- User has S2/S3 in filename - search for matching season entry
             for i, media in ipairs(results) do
                 local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
                 for _, syn in ipairs(media.synonyms or {}) do
                     full_text = full_text .. " " .. syn
                 end
                 
-                -- Check for Season 3
-                if full_text:lower():match("season 3") or full_text:lower():match("3rd season") then
-                    if episode_num > 47 then -- Heuristic for JJK S3
-                        selected = media
-                        found_smart_match = true
-                        debug_log(string.format("Smart Match: Detected Season 3 via Keywords for Ep %d", episode_num))
+                local is_match = false
+                if season_num == 3 and (full_text:lower():match("season 3") or full_text:lower():match("3rd season")) then
+                    is_match = true
+                elseif season_num == 2 and (full_text:lower():match("season 2") or full_text:lower():match("2nd season")) then
+                    is_match = true
+                end
+                
+                if is_match then
+                    selected = media
+                    found_smart_match = true
+                    actual_episode = episode_num
+                    debug_log(string.format("Smart Match: Matched S%d via parsed season number", season_num))
+                    break
+                end
+            end
+        end
+
+        -- Fallback: If episode number exceeds first result's episode count, try cumulative calculation
+        if not found_smart_match and episode_num > (selected.episodes or 0) then
+            -- Build chronological season list by finding season markers
+            local seasons = {}
+            
+            -- Find base season (no season marker)
+            for i, media in ipairs(results) do
+                if media.format == "TV" and media.episodes then
+                    local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
+                    for _, syn in ipairs(media.synonyms or {}) do
+                        full_text = full_text .. " " .. syn
+                    end
+                    
+                    if not full_text:lower():match("season") and not full_text:lower():match("%dnd") and not full_text:lower():match("%drd") and not full_text:lower():match("%dth") then
+                        seasons[1] = {media = media, eps = media.episodes, name = media.title.romaji}
                         break
                     end
-                elseif full_text:lower():match("season 2") or full_text:lower():match("2nd season") then
-                    if not found_smart_match and episode_num > 24 then
-                        selected = media
-                        found_smart_match = true
-                        debug_log(string.format("Smart Match: Detected Season 2 via Keywords for Ep %d", episode_num))
+                end
+            end
+            
+            -- Find Season 2
+            for i, media in ipairs(results) do
+                if media.format == "TV" and media.episodes then
+                    local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
+                    for _, syn in ipairs(media.synonyms or {}) do
+                        full_text = full_text .. " " .. syn
                     end
+                    if full_text:lower():match("2nd season") or full_text:lower():match("season 2") then
+                        seasons[2] = {media = media, eps = media.episodes, name = media.title.romaji}
+                        break
+                    end
+                end
+            end
+            
+            -- Find Season 3
+            for i, media in ipairs(results) do
+                if media.format == "TV" and media.episodes then
+                    local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
+                    for _, syn in ipairs(media.synonyms or {}) do
+                        full_text = full_text .. " " .. syn
+                    end
+                    if full_text:lower():match("3rd season") or full_text:lower():match("season 3") then
+                        seasons[3] = {media = media, eps = media.episodes, name = media.title.romaji}
+                        break
+                    end
+                end
+            end
+            
+            -- Calculate cumulative episodes
+            local cumulative = 0
+            for season_idx = 1, 3 do
+                if seasons[season_idx] then
+                    local season_eps = seasons[season_idx].eps
+                    debug_log(string.format("  Season %d: %s (%d eps, cumulative: %d-%d)", 
+                        season_idx, seasons[season_idx].name, season_eps, cumulative + 1, cumulative + season_eps))
+                    
+                    if episode_num <= cumulative + season_eps then
+                        selected = seasons[season_idx].media
+                        actual_episode = episode_num - cumulative
+                        found_smart_match = true
+                        debug_log(string.format("Cumulative Match: Ep %d -> %s (Season %d, Episode %d)", 
+                            episode_num, selected.title.romaji, season_idx, actual_episode))
+                        break
+                    end
+                    cumulative = cumulative + season_eps
                 end
             end
         end
@@ -324,9 +394,11 @@ local function search_anilist()
                 marker, i, media.id, m_format, total_eps, first_syn, romaji))
         end
 
-        mp.osd_message(string.format("AniList Match: %s\nID: %s\nFormat: %s | Eps: %s", 
+        mp.osd_message(string.format("AniList Match: %s\nID: %s | S%d E%d\nFormat: %s | Total Eps: %s", 
             selected.title.romaji, 
-            selected.id, 
+            selected.id,
+            season_num,
+            actual_episode,
             selected.format or "TV",
             selected.episodes or "?"), 5)
     else
