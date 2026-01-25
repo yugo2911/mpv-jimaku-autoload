@@ -5,7 +5,10 @@ local CONFIG_DIR = mp.command_native({"expand-path", "~~/"})
 local LOG_FILE = CONFIG_DIR .. "/anilist-debug.log"
 local ANILIST_API_URL = "https://graphql.anilist.co"
 
--- Helper function to write to log file
+-- Parser configuration
+local LOG_ONLY_ERRORS = false
+
+-- Unified logging function
 local function debug_log(message, is_error)
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local prefix = is_error and "[ERROR] " or "[INFO] "
@@ -16,34 +19,17 @@ local function debug_log(message, is_error)
         f:write(log_msg)
         f:close()
     end
-    -- Also print to mpv terminal
-    print(log_msg:gsub("\n", ""))
+    
+    -- Print to mpv terminal if not suppressed
+    local should_log = not LOG_ONLY_ERRORS or is_error
+    if should_log then
+        print(log_msg:gsub("\n", ""))
+    end
 end
 
 -------------------------------------------------------------------------------
 -- FILENAME PARSER LOGIC (Based on parser.lua)
 -------------------------------------------------------------------------------
-
--- CONFIGURATION
-local LOG_ONLY_ERRORS = false -- Set to true to suppress successful parse logs
-local DEBUG_LOG_PATH = "/parser_debug.log"
-
--- Open debug log file
-local debug_log = io.open(DEBUG_LOG_PATH, "w")
-
-local function log(message, is_error)
-    -- If LOG_ONLY_ERRORS is true, we only print if is_error is true
-    local should_log = not LOG_ONLY_ERRORS or is_error
-    
-    if debug_log then
-        debug_log:write(os.date("%Y-%m-%d %H:%M:%S") .. " - " .. (is_error and "[ERROR] " or "") .. message .. "\n")
-        debug_log:flush()
-    end
-    
-    if should_log then
-        print(message)
-    end
-end
 
 -- Helper to extract content inside brackets/parentheses
 local function extract_hash(str)
@@ -183,7 +169,7 @@ local function parse_filename(filename)
     
     -- If we still have nothing, the line is truly unparseable by current logic
     if not title or title == "" then
-        log("FAILED TO PARSE: " .. original_raw, true)
+        debug_log("FAILED TO PARSE: " .. original_raw, true)
         return nil
     end
     
@@ -206,7 +192,7 @@ local function parse_filename(filename)
         group = release_group
     }
 
-    log(string.format("Parsed: [%s] S%02d E%s | %s", 
+    debug_log(string.format("Parsed: [%s] S%02d E%s | %s", 
         result.title, 
         result.season, 
         result.episode, 
@@ -214,45 +200,6 @@ local function parse_filename(filename)
 
     return result
 end
-
-local function process_files(filenames)
-    log("=== Processing " .. #filenames .. " entries ===")
-    local results = {}
-    local failures = 0
-    
-    for _, filename in ipairs(filenames) do
-        local res = parse_filename(filename)
-        if res then
-            table.insert(results, res)
-        else
-            failures = failures + 1
-        end
-    end
-    
-    log("\n=== SUMMARY ===")
-    log(string.format("Total: %d | Success: %d | Failures: %d", #filenames, #results, failures), failures > 0)
-    return results
-end
-
-local function main()
-    local file = io.open(INPUT_FILE, "r")
-    if not file then
-        log("Could not find " .. INPUT_FILE, true)
-        return
-    end
-    
-    local lines = {}
-    for line in file:lines() do
-        if line:match("%S") then table.insert(lines, line) end
-    end
-    file:close()
-    
-    process_files(lines)
-    
-    if debug_log then debug_log:close() end
-end
-
-main()
 
 -------------------------------------------------------------------------------
 -- ANILIST GRAPHQL LOGIC
@@ -301,6 +248,11 @@ local function search_anilist()
     if not filename then return end
 
     local parsed = parse_filename(filename)
+    if not parsed then
+        mp.osd_message("AniList: Failed to parse filename", 3)
+        return
+    end
+
     mp.osd_message("AniList: Searching for " .. parsed.title .. "...", 3)
 
     local query = [[
@@ -327,36 +279,34 @@ local function search_anilist()
         local results = data.Page.media
         local selected = results[1] -- Start with best search match
         
-        debug_log(string.format("Analyzing %d potential matches for '%s' (E%d)...", #results, parsed.title, parsed.episode))
+        debug_log(string.format("Analyzing %d potential matches for '%s' (E%s)...", #results, parsed.title, parsed.episode))
 
         -- SMART SELECTION & CUMULATIVE EPISODE LOGIC
-        local remaining_episodes = parsed.episode
+        local episode_num = tonumber(parsed.episode) or 1
         local found_smart_match = false
 
         -- Filter for TV shows or likely sequels to calculate cumulative offsets
-        -- Note: AniList search results aren't always in chronological order, 
-        -- so we prioritize searching for Season keywords if episode count is high.
-        if parsed.episode > (selected.episodes or 0) then
-            -- 1. Try Keyword Match first (S2, S3, etc)
+        if episode_num > (selected.episodes or 0) then
+            -- Try Keyword Match first (S2, S3, etc)
             for i, media in ipairs(results) do
                 local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
                 for _, syn in ipairs(media.synonyms or {}) do
                     full_text = full_text .. " " .. syn
                 end
                 
-                -- Check for Season 2, Season 3, etc.
+                -- Check for Season 3
                 if full_text:lower():match("season 3") or full_text:lower():match("3rd season") then
-                    if parsed.episode > 47 then -- Heuristic for JJK S3
+                    if episode_num > 47 then -- Heuristic for JJK S3
                         selected = media
                         found_smart_match = true
-                        debug_log(string.format("Smart Match: Detected Season 3 via Keywords for Ep %d", parsed.episode))
+                        debug_log(string.format("Smart Match: Detected Season 3 via Keywords for Ep %d", episode_num))
                         break
                     end
                 elseif full_text:lower():match("season 2") or full_text:lower():match("2nd season") then
-                    if not found_smart_match and parsed.episode > 24 then
+                    if not found_smart_match and episode_num > 24 then
                         selected = media
                         found_smart_match = true
-                        debug_log(string.format("Smart Match: Detected Season 2 via Keywords for Ep %d", parsed.episode))
+                        debug_log(string.format("Smart Match: Detected Season 2 via Keywords for Ep %d", episode_num))
                     end
                 end
             end
