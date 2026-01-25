@@ -1,9 +1,29 @@
-local utils = require 'mp.utils'
+-- Detect if running standalone (command line) or in mpv
+local STANDALONE_MODE = not pcall(function() return mp.get_property("filename") end)
+
+local utils
+if not STANDALONE_MODE then
+    utils = require 'mp.utils'
+end
 
 -- CONFIGURATION
-local CONFIG_DIR = mp.command_native({"expand-path", "~~/"})
-local LOG_FILE = CONFIG_DIR .. "/anilist-debug.log"
+local CONFIG_DIR
+local LOG_FILE
+local PARSER_LOG_FILE
+local TEST_FILE
 local ANILIST_API_URL = "https://graphql.anilist.co"
+
+if STANDALONE_MODE then
+    CONFIG_DIR = "."
+    LOG_FILE = "./anilist-debug.log"
+    PARSER_LOG_FILE = "./parser-debug.log"
+    TEST_FILE = "./torrents.txt"
+else
+    CONFIG_DIR = mp.command_native({"expand-path", "~~/"})
+    LOG_FILE = CONFIG_DIR .. "/anilist-debug.log"
+    PARSER_LOG_FILE = CONFIG_DIR .. "/parser-debug.log"
+    TEST_FILE = CONFIG_DIR .. "/torrents.txt"
+end
 
 -- Parser configuration
 local LOG_ONLY_ERRORS = false
@@ -14,13 +34,14 @@ local function debug_log(message, is_error)
     local prefix = is_error and "[ERROR] " or "[INFO] "
     local log_msg = string.format("%s %s%s\n", timestamp, prefix, message)
     
-    local f = io.open(LOG_FILE, "a")
+    local target_log = STANDALONE_MODE and PARSER_LOG_FILE or LOG_FILE
+    local f = io.open(target_log, "a")
     if f then
         f:write(log_msg)
         f:close()
     end
     
-    -- Print to mpv terminal if not suppressed
+    -- Print to terminal if not suppressed
     local should_log = not LOG_ONLY_ERRORS or is_error
     if should_log then
         print(log_msg:gsub("\n", ""))
@@ -28,7 +49,7 @@ local function debug_log(message, is_error)
 end
 
 -------------------------------------------------------------------------------
--- FILENAME PARSER LOGIC (Based on parser.lua)
+-- FILENAME PARSER LOGIC
 -------------------------------------------------------------------------------
 
 -- Helper to extract content inside brackets/parentheses
@@ -119,15 +140,20 @@ local function parse_filename(filename)
         title, season, episode = raw_content:match("^(.-)[%s%.%_][Ss](%d+)[Ee](%d+)")
     end
     
-    -- Season Pack (No Episode) - e.g. Title.S01.1080p
-    if not title then
-        title, season = raw_content:match("^(.-)[%s%.%_][Ss](%d+)")
-        if title and season then episode = "PACK" end
-    end
-    
-    -- S# - Episode (SubsPlease/Inka Style)
+    -- S# - Episode (SubsPlease/Inka Style) - MOVED BEFORE Season Pack to take priority
     if not title then
         title, season, episode = raw_content:match("^(.-)[%s%.%_][Ss](%d+)[%s%.%_]+%-[%s%.%_]+(%d+)")
+    end
+    
+    -- Season Pack (No Episode) - e.g. Title.S01.1080p - ONLY if no dash follows
+    if not title then
+        local temp_title, temp_season = raw_content:match("^(.-)[%s%.%_][Ss](%d+)[%s%.%_]")
+        -- Make sure it's not "S2 - 02" pattern (which has dash)
+        if temp_title and temp_season and not raw_content:match("^.-[%s%.%_][Ss]%d+[%s%.%_]*%-") then
+            title = temp_title
+            season = temp_season
+            episode = "PACK"
+        end
     end
 
     -- Explicit "Episode ##"
@@ -178,9 +204,25 @@ local function parse_filename(filename)
     episode = clean_episode(episode)
     quality = extract_quality(raw_content)
     
-    -- Post-process: If season wasn't found, check the normalized title for "S1" or "Season 1"
+    -- Post-process: Extract season from title if not found in pattern
     if not season then
-        season = title:match("[Ss]eason%s+(%d+)") or title:match("[%s%.%_][Ss](%d+)")
+        -- Check for "Season 2", "2nd Season", "3rd Season" etc. in title
+        season = title:match("(%d+)nd%s+[Ss]eason") or 
+                 title:match("(%d+)rd%s+[Ss]eason") or
+                 title:match("(%d+)th%s+[Ss]eason") or
+                 title:match("[Ss]eason%s+(%d+)")
+        
+        -- If found, remove it from title
+        if season then
+            title = title:gsub("%d+nd%s+[Ss]eason", "")
+            title = title:gsub("%d+rd%s+[Ss]eason", "")
+            title = title:gsub("%d+th%s+[Ss]eason", "")
+            title = title:gsub("[Ss]eason%s+%d+", "")
+            title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+        else
+            -- Last resort: check for S1, S2 pattern in title
+            season = title:match("[%s%.%_][Ss](%d+)")
+        end
     end
 
     local result = {
@@ -202,7 +244,96 @@ local function parse_filename(filename)
 end
 
 -------------------------------------------------------------------------------
--- ANILIST GRAPHQL LOGIC
+-- PARSER TEST MODE
+-------------------------------------------------------------------------------
+
+local function test_parser(input_file)
+    local test_file = input_file or TEST_FILE
+    
+    debug_log("=== PARSER TEST MODE STARTED ===")
+    debug_log("Reading from: " .. test_file)
+    
+    local file = io.open(test_file, "r")
+    if not file then
+        debug_log("Could not find " .. test_file, true)
+        debug_log("Please create the file with torrent filenames (one per line)", true)
+        return
+    end
+    
+    local lines = {}
+    for line in file:lines() do
+        if line:match("%S") then
+            table.insert(lines, line)
+        end
+    end
+    file:close()
+    
+    debug_log(string.format("Processing %d entries", #lines))
+    debug_log("")
+    
+    local results = {}
+    local failures = 0
+    
+    for _, filename in ipairs(lines) do
+        local res = parse_filename(filename)
+        if res then
+            table.insert(results, res)
+        else
+            failures = failures + 1
+        end
+    end
+    
+    debug_log("")
+    debug_log("=== PARSER TEST SUMMARY ===")
+    debug_log(string.format("Total: %d | Success: %d | Failures: %d", #lines, #results, failures), failures > 0)
+    debug_log("Results written to: " .. PARSER_LOG_FILE)
+    
+    return results, failures
+end
+
+-------------------------------------------------------------------------------
+-- STANDALONE MODE EXECUTION
+-------------------------------------------------------------------------------
+
+if STANDALONE_MODE then
+    -- Parse command line arguments
+    local input_file = nil
+    local show_help = false
+    
+    for i = 1, #arg do
+        if arg[i] == "--parser" and arg[i + 1] then
+            input_file = arg[i + 1]
+        elseif arg[i] == "--help" or arg[i] == "-h" then
+            show_help = true
+        end
+    end
+    
+    if show_help then
+        print("AniList Parser - Standalone Mode")
+        print("")
+        print("Usage:")
+        print("  lua anilist.lua --parser <filename>")
+        print("")
+        print("Examples:")
+        print("  lua anilist.lua --parser torrents.txt")
+        print("  lua anilist.lua --parser /path/to/files.txt")
+        print("")
+        print("Output:")
+        print("  Results are written to parser-debug.log")
+        os.exit(0)
+    end
+    
+    -- Clear log file
+    local f = io.open(PARSER_LOG_FILE, "w")
+    if f then f:close() end
+    
+    -- Run parser test
+    test_parser(input_file)
+    os.exit(0)
+end
+
+-------------------------------------------------------------------------------
+-- MPV MODE - ANILIST INTEGRATION
 -------------------------------------------------------------------------------
 
 local function make_anilist_request(query, variables)
