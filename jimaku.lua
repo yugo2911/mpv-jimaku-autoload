@@ -95,27 +95,6 @@ local function ensure_subtitle_cache()
     end
 end
 
--- Calculate cumulative episode number for Jimaku (which uses continuous numbering)
-local function calculate_jimaku_episode(season_num, episode_num, seasons_data)
-    if not season_num or season_num == 1 then
-        return episode_num
-    end
-    
-    -- Calculate cumulative episodes from previous seasons
-    local cumulative = 0
-    for season_idx = 1, season_num - 1 do
-        if seasons_data and seasons_data[season_idx] then
-            cumulative = cumulative + seasons_data[season_idx].eps
-        else
-            -- Fallback: assume standard 13-episode season if data unavailable
-            cumulative = cumulative + 13
-            debug_log(string.format("Warning: Season %d data unavailable, assuming 13 episodes", season_idx))
-        end
-    end
-    
-    return cumulative + episode_num
-end
-
 -------------------------------------------------------------------------------
 -- FILENAME PARSER LOGIC
 -------------------------------------------------------------------------------
@@ -658,7 +637,6 @@ local function search_anilist()
         local found_smart_match = false
         local actual_episode = episode_num
         local actual_season = 1
-        local seasons = {}  -- Store season data for Jimaku calculation
         
         -- Check if this is a special episode based on parsed data
         local is_special_ep = parsed.is_special
@@ -705,6 +683,7 @@ local function search_anilist()
         -- Priority 3: Fallback - If episode number exceeds first result's episode count OR no explicit season, try cumulative calculation
         if not found_smart_match and (not season_num or episode_num > (selected.episodes or 0)) then
             -- Build chronological season list by finding season markers
+            local seasons = {}
             
             -- Find base season (no season marker)
             for i, media in ipairs(results) do
@@ -796,45 +775,10 @@ local function search_anilist()
             selected.format or "TV",
             selected.episodes or "?"), 5)
 
-        -- Calculate Jimaku episode number (handles cumulative numbering)
-        local jimaku_episode = actual_episode
-        
-        -- Build season data for cumulative calculation
-        if actual_season > 1 then
-            local season_data = {}
-            for season_idx = 1, 3 do
-                if seasons and seasons[season_idx] then
-                    season_data[season_idx] = {eps = seasons[season_idx].eps}
-                end
-            end
-            
-            -- If we don't have complete season data, try to infer from results
-            if not season_data[1] and actual_season == 2 then
-                -- Look for Season 1 in results to get episode count
-                for _, media in ipairs(results) do
-                    local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
-                    for _, syn in ipairs(media.synonyms or {}) do
-                        full_text = full_text .. " " .. syn
-                    end
-                    
-                    if not full_text:lower():match("season") and not full_text:lower():match("%dnd") and 
-                       not full_text:lower():match("%drd") and not full_text:lower():match("%dth") and 
-                       media.format == "TV" and media.episodes then
-                        season_data[1] = {eps = media.episodes}
-                        break
-                    end
-                end
-            end
-            
-            jimaku_episode = calculate_jimaku_episode(actual_season, actual_episode, season_data)
-            debug_log(string.format("Jimaku Episode Conversion: S%d E%d -> Cumulative Episode %d", 
-                actual_season, actual_episode, jimaku_episode))
-        end
-
         -- Try to fetch subtitles from Jimaku
-        local jimaku_entry = search_jimaku_subtitles(selected.id, jimaku_episode)
+        local jimaku_entry = search_jimaku_subtitles(selected.id, actual_episode)
         if jimaku_entry then
-            download_subtitle(jimaku_entry.id, jimaku_episode, selected.title.romaji)
+            download_subtitle(jimaku_entry.id, actual_episode, selected.title.romaji)
         end
     else
         debug_log("FAILURE: No matches found for " .. parsed.title, true)
