@@ -42,6 +42,9 @@ local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file 
 -- Jimaku API key (will be loaded from file)
 local JIMAKU_API_KEY = ""
 
+-- Episode file cache
+local episode_cache = {}
+
 -- Unified logging function
 local function debug_log(message, is_error)
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
@@ -93,6 +96,140 @@ local function ensure_subtitle_cache()
             args = args
         })
     end
+end
+
+-- Calculate cumulative episode number for Jimaku (which uses continuous numbering)
+local function calculate_jimaku_episode(season_num, episode_num, seasons_data)
+    if not season_num or season_num == 1 then
+        return episode_num
+    end
+    
+    -- Calculate cumulative episodes from previous seasons
+    local cumulative = 0
+    for season_idx = 1, season_num - 1 do
+        if seasons_data and seasons_data[season_idx] then
+            cumulative = cumulative + seasons_data[season_idx].eps
+        else
+            -- Fallback: assume standard 13-episode season if data unavailable
+            cumulative = cumulative + 13
+            debug_log(string.format("Warning: Season %d data unavailable, assuming 13 episodes", season_idx))
+        end
+    end
+    
+    return cumulative + episode_num
+end
+
+-- Reverse: Convert Jimaku cumulative episode to AniList season episode
+local function convert_jimaku_to_anilist_episode(jimaku_ep, target_season, seasons_data)
+    if not target_season or target_season == 1 then
+        return jimaku_ep
+    end
+    
+    -- Calculate cumulative offset from previous seasons
+    local cumulative = 0
+    for season_idx = 1, target_season - 1 do
+        if seasons_data and seasons_data[season_idx] then
+            cumulative = cumulative + seasons_data[season_idx].eps
+        else
+            cumulative = cumulative + 13  -- Fallback
+        end
+    end
+    
+    return jimaku_ep - cumulative
+end
+
+-- Normalize full-width digits to ASCII
+local function normalize_digits(s)
+    if not s then return s end
+    
+    -- Simple approach: replace common full-width digits
+    s = s:gsub("０", "0"):gsub("１", "1"):gsub("２", "2"):gsub("３", "3"):gsub("４", "4")
+    s = s:gsub("５", "5"):gsub("６", "6"):gsub("７", "7"):gsub("８", "8"):gsub("９", "9")
+    
+    return s
+end
+
+-- Parse Jimaku subtitle filename to extract episode number(s)
+local function parse_jimaku_filename(filename)
+    if not filename then return nil, nil end
+    
+    -- Normalize full-width digits
+    filename = normalize_digits(filename)
+    
+    -- Pattern cascade (ordered by reliability)
+    local patterns = {
+        -- SxxExx patterns
+        {"S(%d+)E(%d+)", "season_episode"},
+        {"[Ss](%d+)[Ee](%d+)", "season_episode"},
+        {"S(%d+)%s*%-%s*E(%d+)", "season_episode"},
+        {"Season%s*(%d+)%s*%-%s*(%d+)", "season_episode"},
+        
+        -- Fractional episodes (13.5)
+        {"%-%s*(%d+%.%d+)", "fractional"},
+        {"%s(%d+%.%d+)", "fractional"},
+        
+        -- EPxx / Exx
+        {"EP(%d+)", "episode"},
+        {"[Ee]p%s*(%d+)", "episode"},
+        {"[Ee](%d+)", "episode"},
+        
+        -- Episode keyword
+        {"Episode%s*(%d+)", "episode"},
+        
+        -- Japanese patterns
+        {"[#＃](%d+)", "episode"},
+        {"第(%d+)[話回]", "episode"},
+        {"（(%d+)）", "episode"},
+        
+        -- Common patterns
+        {"_(%d+)%.", "episode"},
+        {"%s(%d+)%s+BD%.", "episode"},
+        {"%s(%d+)%s+Web%s", "episode"},
+        {"%-%s*(%d+)%s*[%[(]", "episode"},
+        {"%-%s*(%d+)%s*％", "episode"},
+        {"%s(%d+)%s*%[", "episode"},
+        
+        -- Track patterns
+        {"track(%d+)", "episode"},
+        
+        -- Underscore patterns
+        {"_(%d%d%d)%.[AaSs]", "episode"},
+        {"_(%d%d)%.[AaSs]", "episode"},
+        
+        -- Dash patterns
+        {"%-%s*(%d+)%.", "episode"},
+        
+        -- Pure number
+        {"^(%d+)%.", "episode"},
+    }
+    
+    for _, pattern_data in ipairs(patterns) do
+        local pattern = pattern_data[1]
+        local ptype = pattern_data[2]
+        
+        if ptype == "season_episode" then
+            local s, e = filename:match(pattern)
+            if s and e then
+                return tonumber(s), tonumber(e)
+            end
+        elseif ptype == "fractional" then
+            local e = filename:match(pattern)
+            if e then
+                return nil, e  -- Return as string for fractional
+            end
+        else
+            local e = filename:match(pattern)
+            if e then
+                local num = tonumber(e)
+                -- Sanity check: episode numbers should be reasonable
+                if num and num > 0 and num < 9999 then
+                    return nil, num
+                end
+            end
+        end
+    end
+    
+    return nil, nil
 end
 
 -------------------------------------------------------------------------------
@@ -419,13 +556,13 @@ end
 -------------------------------------------------------------------------------
 
 -- Search Jimaku for subtitle entry by AniList ID
-local function search_jimaku_subtitles(anilist_id, episode_num)
+local function search_jimaku_subtitles(anilist_id)
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
         debug_log("Jimaku API key not configured - skipping subtitle search", false)
         return nil
     end
     
-    debug_log(string.format("Searching Jimaku for AniList ID: %d, Episode: %d", anilist_id, episode_num))
+    debug_log(string.format("Searching Jimaku for AniList ID: %d", anilist_id))
     
     -- Search for entry by AniList ID
     local search_url = string.format("%s/entries/search?anilist_id=%d&anime=true", 
@@ -459,12 +596,20 @@ local function search_jimaku_subtitles(anilist_id, episode_num)
     return entries[1]
 end
 
--- Download subtitle file from Jimaku
-local function download_subtitle(entry_id, episode_num, anime_title)
-    local files_url = string.format("%s/entries/%d/files?episode=%d",
-        JIMAKU_API_URL, entry_id, episode_num)
+-- Fetch ALL subtitle files for an entry (no episode filter)
+local function fetch_all_episode_files(entry_id)
+    -- Check cache first
+    if episode_cache[entry_id] then
+        local cache_age = os.time() - episode_cache[entry_id].timestamp
+        if cache_age < 300 then  -- Cache valid for 5 minutes
+            debug_log(string.format("Using cached file list for entry %d (%d files)", entry_id, #episode_cache[entry_id].files))
+            return episode_cache[entry_id].files
+        end
+    end
     
-    debug_log("Fetching subtitle files from: " .. files_url)
+    local files_url = string.format("%s/entries/%d/files", JIMAKU_API_URL, entry_id)
+    
+    debug_log("Fetching ALL subtitle files from: " .. files_url)
     
     local args = {
         "curl", "-s", "-X", "GET",
@@ -480,40 +625,201 @@ local function download_subtitle(entry_id, episode_num, anime_title)
     })
     
     if result.status ~= 0 or not result.stdout then
-        debug_log("Failed to get subtitle files", true)
-        return false
+        debug_log("Failed to fetch file list", true)
+        return nil
     end
     
     local ok, files = pcall(utils.parse_json, result.stdout)
-    if not ok or not files or #files == 0 then
-        debug_log("No subtitle files found for episode " .. episode_num, false)
+    if not ok or not files then
+        debug_log("Failed to parse file list JSON", true)
+        return nil
+    end
+    
+    debug_log(string.format("Retrieved %d total subtitle files", #files))
+    
+    -- Cache the result
+    episode_cache[entry_id] = {
+        files = files,
+        timestamp = os.time()
+    }
+    
+    return files
+end
+
+-- Intelligent episode matching using metadata
+local function match_episodes_intelligent(files, target_episode, target_season, seasons_data, anime_title)
+    if not files or #files == 0 then
+        return {}
+    end
+    
+    debug_log(string.format("Matching files for S%d E%d from %d total files...", 
+        target_season or 1, target_episode, #files))
+    
+    local matches = {}
+    local all_parsed = {}
+    
+    -- Calculate what cumulative episode we're actually looking for
+    local target_cumulative = calculate_jimaku_episode(target_season, target_episode, seasons_data)
+    debug_log(string.format("Target: S%d E%d = Cumulative Episode %d", 
+        target_season or 1, target_episode, target_cumulative))
+    
+    -- Parse all filenames and build episode map
+    for _, file in ipairs(files) do
+        local jimaku_season, jimaku_episode = parse_jimaku_filename(file.name)
+        
+        if jimaku_episode then
+            local anilist_episode = nil
+            local match_type = ""
+            local is_match = false
+            
+            -- CASE 1: Jimaku file has explicit season marker (S02E14, S03E48)
+            if jimaku_season then
+                -- Try multiple interpretations of season-marked files
+                
+                -- Interpretation 1A: Standard season numbering (S2E03 = Season 2, Episode 3)
+                if jimaku_season == target_season and jimaku_episode == target_episode then
+                    is_match = true
+                    anilist_episode = jimaku_episode
+                    match_type = "direct_season_match"
+                end
+                
+                -- Interpretation 1B: Netflix-style absolute numbering in season format
+                -- (S02E14 actually means "Episode 14 overall", not "Season 2, Episode 14")
+                if not is_match and jimaku_episode == target_cumulative then
+                    is_match = true
+                    anilist_episode = target_episode
+                    match_type = "netflix_absolute_in_season_format"
+                end
+                
+                -- Interpretation 1C: Season marker but episode is cumulative from that season's start
+                -- (S02E03 means 3rd episode of Season 2, where S2 started at overall episode 14)
+                if not is_match and jimaku_season == target_season then
+                    -- Calculate what cumulative episode this would be
+                    local file_cumulative = calculate_jimaku_episode(jimaku_season, jimaku_episode, seasons_data)
+                    if file_cumulative == target_cumulative then
+                        is_match = true
+                        anilist_episode = target_episode
+                        match_type = "season_relative_cumulative"
+                    end
+                end
+            
+            -- CASE 2: Jimaku file has NO season marker - could be cumulative OR within-season
+            else
+                -- Interpretation 2A: It's a cumulative episode number (E14 = overall episode 14)
+                if jimaku_episode == target_cumulative then
+                    is_match = true
+                    anilist_episode = target_episode
+                    match_type = "cumulative_match"
+                end
+                
+                -- Interpretation 2B: It's the within-season episode (E03 = 3rd episode of current season)
+                if not is_match and jimaku_episode == target_episode then
+                    is_match = true
+                    anilist_episode = target_episode
+                    match_type = "direct_episode_match"
+                end
+                
+                -- Interpretation 2C: Reverse cumulative conversion
+                -- (File says E14, but maybe it means something else in context)
+                if not is_match then
+                    local converted_ep = convert_jimaku_to_anilist_episode(jimaku_episode, target_season, seasons_data)
+                    if converted_ep == target_episode then
+                        is_match = true
+                        anilist_episode = target_episode
+                        match_type = "reverse_cumulative_conversion"
+                    end
+                end
+            end
+            
+            -- Store parsed info for debugging
+            table.insert(all_parsed, {
+                filename = file.name,
+                jimaku_season = jimaku_season,
+                jimaku_episode = jimaku_episode,
+                anilist_episode = anilist_episode,
+                match_type = match_type,
+                is_match = is_match,
+                file = file
+            })
+            
+            -- Add to matches if we found a match
+            if is_match then
+                table.insert(matches, file)
+                debug_log(string.format("  ✓ MATCH [%s]: %s", 
+                    match_type, file.name:sub(1, 80)))
+            end
+        end
+    end
+    
+    -- If no matches found, show what we parsed for debugging
+    if #matches == 0 then
+        debug_log(string.format("No matches found for S%d E%d (cumulative: %d). Parsed episodes:", 
+            target_season or 1, target_episode, target_cumulative))
+        for i = 1, math.min(10, #all_parsed) do
+            local p = all_parsed[i]
+            local jimaku_display = p.jimaku_season and string.format("S%dE%d", p.jimaku_season, p.jimaku_episode) 
+                                   or string.format("E%d", p.jimaku_episode)
+            
+            debug_log(string.format("  [%d] %s... → Jimaku: %s, Tried: %s", 
+                i, 
+                p.filename:sub(1, 40),
+                jimaku_display,
+                p.match_type ~= "" and p.match_type or "no_patterns_matched"))
+        end
+        if #all_parsed > 10 then
+            debug_log(string.format("  ... and %d more files", #all_parsed - 10))
+        end
+    else
+        debug_log(string.format("Found %d matching file(s)", #matches))
+    end
+    
+    return matches
+end
+
+-- Smart subtitle download with intelligent matching
+local function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anime_title)
+    -- Fetch all files for this entry
+    local all_files = fetch_all_episode_files(entry_id)
+    
+    if not all_files or #all_files == 0 then
+        debug_log("No subtitle files available for this entry", false)
         return false
     end
     
-    debug_log(string.format("Found %d subtitle file(s) for episode %d:", #files, episode_num))
+    -- Match files intelligently
+    local matched_files = match_episodes_intelligent(all_files, target_episode, target_season, seasons_data, anime_title)
     
-    -- Log all available subtitle files
-    for i, file in ipairs(files) do
+    if #matched_files == 0 then
+        debug_log(string.format("No subtitle files matched S%d E%d", target_season or 1, target_episode), false)
+        return false
+    end
+    
+    debug_log(string.format("Found %d matching subtitle file(s) for S%d E%d:", 
+        #matched_files, target_season or 1, target_episode))
+    
+    -- Log all matched files
+    for i, file in ipairs(matched_files) do
         local size_kb = math.floor(file.size / 1024)
         debug_log(string.format("  [%d] %s (%d KB)", i, file.name, size_kb))
     end
     
-    -- Determine how many subtitles to download
-    local max_downloads = #files
+    -- Determine how many to download
+    local max_downloads = #matched_files
     if JIMAKU_MAX_SUBS ~= "all" and type(JIMAKU_MAX_SUBS) == "number" then
-        max_downloads = math.min(JIMAKU_MAX_SUBS, #files)
+        max_downloads = math.min(JIMAKU_MAX_SUBS, #matched_files)
     end
     
-    debug_log(string.format("Downloading %d of %d available subtitle(s)...", max_downloads, #files))
+    debug_log(string.format("Downloading %d of %d matched subtitle(s)...", max_downloads, #matched_files))
     
     local success_count = 0
     
     -- Download and load subtitles
     for i = 1, max_downloads do
-        local subtitle_file = files[i]
+        local subtitle_file = matched_files[i]
         local subtitle_path = SUBTITLE_CACHE_DIR .. "/" .. subtitle_file.name
         
-        debug_log(string.format("Downloading [%d/%d]: %s (%d bytes)", i, max_downloads, subtitle_file.name, subtitle_file.size))
+        debug_log(string.format("Downloading [%d/%d]: %s (%d bytes)", 
+            i, max_downloads, subtitle_file.name, subtitle_file.size))
         
         -- Download the file
         local download_args = {
@@ -531,10 +837,12 @@ local function download_subtitle(entry_id, episode_num, anime_title)
         if download_result.status == 0 then
             -- Load subtitle into mpv
             mp.commandv("sub-add", subtitle_path)
-            debug_log(string.format("Successfully loaded subtitle [%d/%d]: %s", i, max_downloads, subtitle_file.name))
+            debug_log(string.format("Successfully loaded subtitle [%d/%d]: %s", 
+                i, max_downloads, subtitle_file.name))
             success_count = success_count + 1
         else
-            debug_log(string.format("Failed to download subtitle [%d/%d]: %s", i, max_downloads, subtitle_file.name), true)
+            debug_log(string.format("Failed to download subtitle [%d/%d]: %s", 
+                i, max_downloads, subtitle_file.name), true)
         end
     end
     
@@ -637,6 +945,7 @@ local function search_anilist()
         local found_smart_match = false
         local actual_episode = episode_num
         local actual_season = 1
+        local seasons = {}  -- Store season data for Jimaku calculation
         
         -- Check if this is a special episode based on parsed data
         local is_special_ep = parsed.is_special
@@ -683,7 +992,6 @@ local function search_anilist()
         -- Priority 3: Fallback - If episode number exceeds first result's episode count OR no explicit season, try cumulative calculation
         if not found_smart_match and (not season_num or episode_num > (selected.episodes or 0)) then
             -- Build chronological season list by finding season markers
-            local seasons = {}
             
             -- Find base season (no season marker)
             for i, media in ipairs(results) do
@@ -775,10 +1083,16 @@ local function search_anilist()
             selected.format or "TV",
             selected.episodes or "?"), 5)
 
-        -- Try to fetch subtitles from Jimaku
-        local jimaku_entry = search_jimaku_subtitles(selected.id, actual_episode)
+        -- Try to fetch subtitles from Jimaku using smart matching
+        local jimaku_entry = search_jimaku_subtitles(selected.id)
         if jimaku_entry then
-            download_subtitle(jimaku_entry.id, actual_episode, selected.title.romaji)
+            download_subtitle_smart(
+                jimaku_entry.id, 
+                actual_episode, 
+                actual_season,
+                seasons,
+                selected.title.romaji
+            )
         end
     else
         debug_log("FAILURE: No matches found for " .. parsed.title, true)
