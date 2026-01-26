@@ -36,7 +36,7 @@ end
 local LOG_ONLY_ERRORS = false
 
 -- Jimaku configuration
-local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
+local JIMAKU_MAX_SUBS = "all" -- Maximum number of subtitles to download and load (set to "all" to download all available)
 local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
 
 -- Jimaku API key (will be loaded from file)
