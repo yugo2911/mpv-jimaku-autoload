@@ -36,7 +36,7 @@ end
 local LOG_ONLY_ERRORS = false
 
 -- Jimaku configuration
-local JIMAKU_MAX_SUBS = "all" -- Maximum number of subtitles to download and load (set to "all" to download all available)
+local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
 local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
 
 -- Jimaku API key (will be loaded from file)
@@ -112,7 +112,6 @@ local function calculate_jimaku_episode(season_num, episode_num, seasons_data)
         else
             -- Fallback: assume standard 13-episode season if data unavailable
             cumulative = cumulative + 13
-            debug_log(string.format("Warning: Season %d data unavailable, assuming 13 episodes", season_idx))
         end
     end
     
@@ -424,7 +423,7 @@ local function parse_filename(filename)
     end
     
     -- Clean up subtitle artifacts for better AniList matching
-    -- First, remove parenthetical content (often Japanese duplicates or extra info)
+    -- Remove parenthetical content (often Japanese duplicates or extra info)
     title = title:gsub("%s*%([^%)]+%)", "")
     title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 
@@ -630,7 +629,7 @@ local function fetch_all_episode_files(entry_id)
     return files
 end
 
--- Intelligent episode matching using metadata
+-- Intelligent episode matching using metadata (fuzzy/lenient approach)
 local function match_episodes_intelligent(files, target_episode, target_season, seasons_data, anime_title)
     if not files or #files == 0 then
         return {}
@@ -642,7 +641,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     local matches = {}
     local all_parsed = {}
     
-    -- Calculate what cumulative episode we're actually looking for
+    -- Calculate what cumulative episode we're looking for
     local target_cumulative = calculate_jimaku_episode(target_season, target_episode, seasons_data)
     debug_log(string.format("Target: S%d E%d = Cumulative Episode %d", 
         target_season or 1, target_episode, target_cumulative))
@@ -656,20 +655,23 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             local match_type = ""
             local is_match = false
             
+            -- Convert to number if it's a string
+            local ep_num = tonumber(jimaku_episode) or 0
+            
             -- CASE 1: Jimaku file has explicit season marker (S02E14, S03E48)
             if jimaku_season then
                 -- Try multiple interpretations of season-marked files
                 
                 -- Interpretation 1A: Standard season numbering (S2E03 = Season 2, Episode 3)
-                if jimaku_season == target_season and jimaku_episode == target_episode then
+                if jimaku_season == target_season and ep_num == target_episode then
                     is_match = true
-                    anilist_episode = jimaku_episode
+                    anilist_episode = target_episode
                     match_type = "direct_season_match"
                 end
                 
                 -- Interpretation 1B: Netflix-style absolute numbering in season format
                 -- (S02E14 actually means "Episode 14 overall", not "Season 2, Episode 14")
-                if not is_match and jimaku_episode == target_cumulative then
+                if not is_match and ep_num == target_cumulative then
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "netflix_absolute_in_season_format"
@@ -679,7 +681,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                 -- (S02E03 means 3rd episode of Season 2, where S2 started at overall episode 14)
                 if not is_match and jimaku_season == target_season then
                     -- Calculate what cumulative episode this would be
-                    local file_cumulative = calculate_jimaku_episode(jimaku_season, jimaku_episode, seasons_data)
+                    local file_cumulative = calculate_jimaku_episode(jimaku_season, ep_num, seasons_data)
                     if file_cumulative == target_cumulative then
                         is_match = true
                         anilist_episode = target_episode
@@ -690,14 +692,14 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             -- CASE 2: Jimaku file has NO season marker - could be cumulative OR within-season
             else
                 -- Interpretation 2A: It's a cumulative episode number (E14 = overall episode 14)
-                if jimaku_episode == target_cumulative then
+                if ep_num == target_cumulative then
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "cumulative_match"
                 end
                 
                 -- Interpretation 2B: It's the within-season episode (E03 = 3rd episode of current season)
-                if not is_match and jimaku_episode == target_episode then
+                if not is_match and ep_num == target_episode then
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "direct_episode_match"
@@ -706,7 +708,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                 -- Interpretation 2C: Reverse cumulative conversion
                 -- (File says E14, but maybe it means something else in context)
                 if not is_match then
-                    local converted_ep = convert_jimaku_to_anilist_episode(jimaku_episode, target_season, seasons_data)
+                    local converted_ep = convert_jimaku_to_anilist_episode(ep_num, target_season, seasons_data)
                     if converted_ep == target_episode then
                         is_match = true
                         anilist_episode = target_episode
@@ -719,7 +721,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             table.insert(all_parsed, {
                 filename = file.name,
                 jimaku_season = jimaku_season,
-                jimaku_episode = jimaku_episode,
+                jimaku_episode = ep_num,
                 anilist_episode = anilist_episode,
                 match_type = match_type,
                 is_match = is_match,
