@@ -235,6 +235,27 @@ end
 -- FILENAME PARSER LOGIC
 -------------------------------------------------------------------------------
 
+-- PERFORMANCE OPTIMIZATION: Set to false to disable disk writes for logging
+local ENABLE_DEBUG_LOG = true
+local log_buffer = {}
+
+-- Buffer-aware logging helper
+local function buffered_log(msg)
+    if not ENABLE_DEBUG_LOG then return end
+    table.insert(log_buffer, msg)
+end
+
+-- Flush buffer to disk in a single operation
+local function flush_log()
+    if not ENABLE_DEBUG_LOG or #log_buffer == 0 then return end
+    local f = io.open(PARSER_LOG_FILE, "a")
+    if f then
+        f:write(os.date("%Y-%m-%d %H:%M:%S ") .. table.concat(log_buffer, "\n" .. os.date("%Y-%m-%d %H:%M:%S ")) .. "\n")
+        f:close()
+    end
+    log_buffer = {} -- Clear buffer
+end
+
 -- Helper to extract content inside brackets/parentheses
 local function extract_hash(str)
     if not str then return "N/A" end
@@ -310,10 +331,10 @@ local function roman_to_int(s)
 end
 
 local function parse_filename(filename)
-    -- 1. Log original filename immediately for traceability
-    local original_raw = filename
-    debug_log("-------------------------------------------")
-    debug_log("INPUT FILENAME: " .. original_raw)
+    -- Start buffering logs for this run
+    log_buffer = {}
+    buffered_log("-------------------------------------------")
+    buffered_log("INPUT FILENAME: " .. filename)
 
     -- Preprocessing using your existing helper
     filename = maybe_reverse(filename)
@@ -349,22 +370,21 @@ local function parse_filename(filename)
 
     -- Pattern B: Explicit Episode Tag (e.g., - 01 or Ep 01)
     if not episode then
-        -- Find all occurrences of " - Number" and pick the last one that isn't clearly metadata
-        -- This fixes "Gintama - 3-nen ... - 12"
-        local last_t, last_ep
-        for t, ep in content:gmatch("(.-)%s+%-%s+(%d+%.?%d*)%s*") do
-            -- We keep updating until we hit the end of the meaningful content
-            -- (metadata like (1080p) will be handled later by the title cleanup)
-            last_t, last_ep = t, ep
+        -- Greedy title match (.*) ensures we find the LAST dash before an episode number
+        -- We explicitly exclude metadata brackets from the episode search part
+        local t, ep = content:match("^(.*)%s+%-%s+(%d+%.?%d*)%s*[^%w]*$")
+        if not t then
+            -- Try matching before a bracket/parenthesis (e.g., "Title - 01 [1080p]")
+            t, ep = content:match("^(.*)%s+%-%s+(%d+%.?%d*)%s*[%[%(]")
         end
         
-        if last_t and last_ep then
-            title, episode = last_t, last_ep
+        if t and ep then
+            title, episode = t, ep
         else
             -- Fallback to standard Ep 01 or Episode 01
-            local t, ep = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
-            if t and ep then
-                title, episode = t, ep
+            local t_ep, ep_val = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
+            if t_ep and ep_val then
+                title, episode = t_ep, ep_val
             end
         end
     end
@@ -408,15 +428,11 @@ local function parse_filename(filename)
     end
 
     -- NEW: Detect Loose Season Number (e.g., "Mato Seihei no Slave 2")
-    -- Only triggers if the title ends in a number and we don't have a season yet
     if not season then
-        -- Check if it's "Part X" - if so, keep it in the title
         local is_part = title:match("[Pp]art%s+(%d+)$")
         if not is_part then
             local loose_s = title:match("%s(%d+)$")
             if loose_s then
-                -- Safety: Only treat as season if title is longer than just the number
-                -- (Prevents "22/7" from losing its "7")
                 if #title > #loose_s + 2 then
                     season = tonumber(loose_s)
                     title = title:gsub("%s%d+$", "")
@@ -449,8 +465,11 @@ local function parse_filename(filename)
         group = release_group
     }
 
-    debug_log(string.format("PARSE RESULT:\n  Title:   [%s]\n  Season:  %s\n  Episode: %s\n  Group:   %s", 
+    buffered_log(string.format("PARSE RESULT:\n  Title:   [%s]\n  Season:  %s\n  Episode: %s\n  Group:   %s", 
         result.title, result.season or "N/A", result.episode, result.group))
+
+    -- Single disk write for the entire parse sequence
+    flush_log()
 
     return result
 end
