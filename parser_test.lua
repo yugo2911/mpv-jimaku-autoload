@@ -5,7 +5,7 @@ local input_file = arg[1] or "torrents.txt"
 local log_file = "parser_test.log"
 
 -- TOGGLE: Set to true to hide successful matches and only see failures
-local ONLY_NIL = false
+local ONLY_NIL = true
 local FALSE_POSITIVE_TEST = false  -- Set to true to treat successful matches as failures
 
 -- open input
