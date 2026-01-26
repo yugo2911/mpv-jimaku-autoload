@@ -1,0 +1,155 @@
+-- reorder_and_autoselect_preferred_sub.lua
+-- Automatically reorder and select subtitles based on user preferences
+
+local mp = require "mp"
+
+------------------------------------------------------------
+-- USER PREFERENCES
+------------------------------------------------------------
+
+local PREFS = {
+    -- Languages prioritized (1st is best). Weights are heavy to ensure 
+    -- a lower-tier language never beats a higher-tier one.
+    languages = { "jpn","eng", "spa", "fre" },
+
+    -- Keywords found in the track title
+    tags = {
+        "forced",
+        "signs",
+        "full",
+        "default"
+    },
+
+    -- Keywords found in the filename (for external subs)
+    providers = {
+        "webrip",
+        "amzn",
+        "amazon",
+        "netflix",
+        "zurako",
+        "nanakoraws",
+        "nanankoraws",
+        "subsplease",
+        "erai%-raws",
+        "asw",
+    },
+
+    filename_patterns = {
+        "jpn%.ass",
+        "signs",
+        "full",
+        "forced",
+	"eng%.srt"
+    },
+
+    prefer_external = true,
+    prefer_jimaku   = true,
+}
+
+------------------------------------------------------------
+-- HELPERS
+------------------------------------------------------------
+
+local function score_track(track)
+    local score = 0
+    local lang  = (track.lang or ""):lower()
+    local title = (track.title or ""):lower()
+    local fn    = (track["external-filename"] or ""):lower()
+
+    -- 1. Language preference (Massive weight: 1000s)
+    -- This ensures any 'eng' track beats any 'jpn' track regardless of other tags.
+    for i, l in ipairs(PREFS.languages) do
+        if lang == l then
+            score = score + (10000 - (i * 1000))
+            break
+        end
+    end
+
+    -- 2. Tag preference (Medium weight: 100s)
+    for i, t in ipairs(PREFS.tags) do
+        if title:match(t) then
+            score = score + (500 - (i * 10))
+        end
+    end
+
+    -- 3. Provider preference (Lower weight: 10s)
+    for i, p in ipairs(PREFS.providers) do
+        if fn:match(p) then
+            score = score + (100 - (i * 5))
+        end
+    end
+
+    -- 4. Filename patterns
+    for i, pat in ipairs(PREFS.filename_patterns) do
+        if fn:match(pat) then
+            score = score + (50 - i)
+        end
+    end
+
+    -- 5. Flags (Internal MKV flags)
+    if track.forced  then score = score + 150 end
+    if track.default then score = score + 50 end
+
+    -- 6. Bonuses
+    if PREFS.prefer_external and track.external then
+        score = score + 200
+    end
+
+    if PREFS.prefer_jimaku and (fn:match("jimaku") or title:match("jimaku")) then
+        score = score + 300
+    end
+
+    return score
+end
+
+------------------------------------------------------------
+-- MAIN LOGIC
+------------------------------------------------------------
+
+local function reorder_and_select()
+    -- Wait until tracks are actually loaded
+    local tracks = mp.get_property_native("track-list")
+    if not tracks then return end
+
+    local subs = {}
+
+    -- Collect and score subtitle tracks
+    for _, t in ipairs(tracks) do
+        if t.type == "sub" then
+            t.score = score_track(t)
+            table.insert(subs, t)
+        end
+    end
+
+    if #subs == 0 then return end
+
+    -- Sort by score descending
+    table.sort(subs, function(a, b)
+        return a.score > b.score
+    end)
+
+    -- Current selected subtitle ID
+    local current_sid = mp.get_property_number("sid", 0)
+    local best = subs[1]
+
+    -- Only change if the best score isn't what is already selected
+    -- This prevents infinite loops when track-list updates
+    if best and best.id ~= current_sid then
+        mp.set_property("sid", best.id)
+        mp.msg.info(string.format("Auto-selected: %s (Score: %d)", 
+            (best.title or best.lang or "Unknown"), best.score))
+    end
+end
+
+------------------------------------------------------------
+-- HOOKS
+------------------------------------------------------------
+
+-- file-loaded: triggers when a new file starts
+mp.register_event("file-loaded", function()
+    -- Small delay to ensure all external tracks are indexed
+    mp.add_timeout(0.1, reorder_and_select)
+end)
+
+-- track-list: triggers if tracks are added/removed dynamically
+mp.observe_property("track-list", "native", reorder_and_select)

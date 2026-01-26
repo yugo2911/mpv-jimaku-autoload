@@ -1,0 +1,145 @@
+Got you — you want a **text‑tree style breakdown** of what this whole script does, section by section, in a clean hierarchical structure.  
+Here’s a clear, readable **textree** that maps the logic and flow of the entire system.
+
+---
+
+# 🌳 **TEXTREE — High‑Level Structure of the Script**
+
+```
+ROOT: anilist + jimaku integration system
+│
+├── 1. Environment Detection
+│     ├── Detects if running in MPV or standalone CLI
+│     ├── Loads mpv.utils only when inside MPV
+│     └── Sets different paths for logs, cache, config
+│
+├── 2. Configuration
+│     ├── File paths (logs, cache, API key)
+│     ├── Jimaku settings (auto-download, max subs)
+│     ├── AniList API URL
+│     └── Episode cache table
+│
+├── 3. Logging System
+│     ├── Unified debug_log()
+│     │     ├── Writes timestamped logs
+│     │     ├── Chooses correct log file (parser vs mpv)
+│     │     └── Prints to terminal unless suppressed
+│
+├── 4. Jimaku API Key Handling
+│     ├── load_jimaku_api_key()
+│     │     ├── Reads API key from file
+│     │     └── Logs errors if missing
+│
+├── 5. Subtitle Cache Directory
+│     ├── ensure_subtitle_cache()
+│     │     ├── Creates directory (mpv subprocess or OS)
+│     │     └── Ensures no Windows popup
+│
+├── 6. Episode Number Math
+│     ├── calculate_jimaku_episode()
+│     │     ├── Converts SxEy → cumulative episode
+│     │     └── Uses AniList season data or fallback 13 eps
+│     ├── convert_jimaku_to_anilist_episode()
+│     │     └── Reverse: cumulative → season episode
+│
+├── 7. Jimaku Filename Parser
+│     ├── normalize_digits()
+│     ├── parse_jimaku_filename()
+│     │     ├── Large pattern cascade:
+│     │     │     ├── SxxExx
+│     │     │     ├── EPxx / Exx
+│     │     │     ├── Episode xx
+│     │     │     ├── Japanese patterns (#, 第xx話, etc.)
+│     │     │     ├── Underscore patterns
+│     │     │     ├── Dash patterns
+│     │     │     └── Pure numeric fallback
+│     │     └── Returns (season, episode)
+│
+├── 8. Torrent Filename Parser (for AniList matching)
+│     ├── extract_hash()
+│     ├── extract_quality()
+│     ├── normalize_title()
+│     ├── maybe_reverse() (fix reversed filenames)
+│     ├── clean_episode()
+│     ├── is_special()
+│     └── parse_filename()
+│           ├── Detects:
+│           │     ├── SxxExx
+│           │     ├── Sx - Ex
+│           │     ├── Season packs
+│           │     ├── Episode xx
+│           │     ├── Title - 01
+│           │     ├── Underscore patterns
+│           │     ├── Movie-year patterns
+│           │     └── Fallback title extraction
+│           └── Normalizes title + season + episode
+│
+├── 9. Standalone Parser Test Mode
+│     ├── test_parser()
+│     │     ├── Reads torrent list
+│     │     ├── Runs parse_filename() on each
+│     │     └── Logs summary
+│     └── CLI argument handling
+│
+├── 10. MPV Mode — Jimaku Integration
+│     ├── search_jimaku_subtitles()
+│     │     ├── Queries Jimaku by AniList ID
+│     │     └── Returns entry metadata
+│
+│     ├── fetch_all_episode_files()
+│     │     ├── GET /entries/<id>/files
+│     │     ├── Caches results for 5 minutes
+│     │     └── Returns list of subtitle files
+│
+│     ├── match_episodes_intelligent()
+│     │     ├── Parses every Jimaku filename
+│     │     ├── Computes target cumulative episode
+│     │     ├── Tries multiple matching strategies:
+│     │     │     ├── Direct SxxExx match
+│     │     │     ├── Netflix-style absolute numbering
+│     │     │     ├── Season-relative cumulative
+│     │     │     ├── Pure cumulative match
+│     │     │     ├── Direct episode match
+│     │     │     └── Reverse cumulative conversion
+│     │     └── Returns list of matching files
+│
+│     └── download_subtitle_smart()
+│           ├── Fetches all files
+│           ├── Matches intelligently
+│           ├── Downloads up to N matches
+│           └── Loads them into MPV
+│
+└── END
+```
+add support for https://github.com/manami-project/anime-offline-database offline database for episode count lookup and other infos wow wish was aware of this earlier
+add kitsunekko-mirro support offline/online support https://github.com/Ajatt-Tools/kitsunekko-mirror/
+
+---
+
+# 🌟 **What this system *actually accomplishes*** (plain English)
+
+- It reads the filename of the video you're watching.  
+- It parses the title, season, and episode using a huge pattern cascade.  
+- It queries AniList to identify the anime.  
+- It queries Jimaku.cc to find all subtitles for that anime.  
+- It parses *every* Jimaku subtitle filename to extract episode numbers.  
+- It converts between:
+  - season episodes  
+  - cumulative episodes  
+  - Netflix-style numbering  
+  - weird fansub numbering  
+- It intelligently matches the correct subtitle file for the current episode.  
+- It downloads the subtitle(s) into a cache folder.  
+- It loads them into MPV automatically.  
+- It logs everything for debugging.  
+
+---
+
+If you want, I can also generate:
+
+- a **flowchart**,  
+- a **sequence diagram**,  
+- a **state machine**,  
+- or a **developer‑friendly README** for the repo.
+
+Just tell me the format you prefer.

@@ -1,0 +1,233 @@
+You’re circling the right idea, but the workflow isn’t fully crystallized yet.  
+Let me lay out the **actual problem**, the **realistic workflow**, and the **Lua‑friendly architecture** that will let you map *any* subtitle folder to *any* AniList entry with deterministic results.
+
+This is exactly the kind of system you’re good at building: modular, deterministic, schema‑driven, and fully local.
+
+---
+
+# 🌸 **What you actually want to solve**
+You have:
+
+```
+D:\kitsunekko-mirror\subtitles\anime_tv\*
+```
+
+Inside it:
+
+```
+[Oshi no Ko]
+[Oshi no Ko] 2nd Season
+[Oshi no Ko] 3rd Season
+∀ Gundam
+07-Ghost
+100-man no Inochi no Ue ni Ore wa Tatteiru
+100-man no Inochi no Ue ni Ore wa Tatteiru 2nd Season
+11eyes
+...
+```
+
+And inside each folder: `.ass` / `.srt` files for episodes.
+
+You want to know:
+
+### **“Which AniList ID corresponds to this folder, and does it contain all episodes for that season?”**
+
+This is not a parser.  
+This is a **title resolver + season resolver + episode coverage checker**.
+
+---
+
+# 🌸 **The real workflow (clean, deterministic, Lua‑friendly)**
+
+## **1. Build a local index of your subtitle folders**
+For each folder:
+
+```
+folder_name = "[Oshi no Ko] 2nd Season"
+```
+
+Extract:
+
+- **base title** → `Oshi no Ko`
+- **season number** → `2`
+- **type** → TV
+
+This is trivial with a few regexes.
+
+---
+
+## **2. Load anime-offline-database-minified.json**
+This gives you:
+
+- titles  
+- synonyms  
+- Japanese titles  
+- romaji  
+- English  
+- AniList / MAL / Kitsu IDs  
+- season/year  
+- type (TV, OVA, Movie)
+
+This is your **resolver database**.
+
+---
+
+## **3. Resolve folder → AniList entry**
+You match:
+
+- folder title  
+- synonyms  
+- romaji  
+- English  
+- Japanese  
+- season number  
+- type  
+
+Example:
+
+```
+Folder: "[Oshi no Ko] 2nd Season"
+→ base title: "Oshi no Ko"
+→ season: 2
+→ type: TV
+```
+
+Search in the database:
+
+- title == "Oshi no Ko"
+- OR synonyms contain "Oshi no Ko"
+- AND season == 2
+- AND type == TV
+
+This yields:
+
+```
+AniList ID: 159831
+```
+
+---
+
+## **4. Scan the folder for episode files**
+Inside:
+
+```
+[Oshi no Ko] 2nd Season\*.ass
+```
+
+Extract episode numbers:
+
+- `01`
+- `02`
+- `03`
+- …
+
+Normalize all episode formats:
+
+- `01`
+- `E01`
+- `S02E01`
+- `第1話`
+- `1話`
+- `EP01`
+- etc.
+
+You already know how to do this — your regex logic is solid.
+
+---
+
+## **5. Compare expected vs. actual episodes**
+AniList entry tells you:
+
+```
+episodes = 12
+```
+
+Your folder contains:
+
+```
+01–12
+```
+
+→ **complete**
+
+If missing:
+
+```
+01–10 only
+```
+
+→ **incomplete**
+
+If extra:
+
+```
+01–12 + OVA + recap
+```
+
+→ **flag extras**
+
+---
+
+# 🌸 **6. Output a clean mapping table**
+Example:
+
+```
+[Oshi no Ko] 2nd Season
+→ AniList: 159831
+→ Episodes found: 12/12
+→ Status: OK
+```
+
+Or:
+
+```
+∀ Gundam
+→ AniList: 81
+→ Episodes found: 49/50
+→ Missing: 50
+```
+
+Or:
+
+```
+100-man no Inochi no Ue ni Ore wa Tatteiru 2nd Season
+→ AniList: 117343
+→ Episodes found: 12/12
+→ Status: OK
+```
+
+---
+
+# 🌸 **7. Lua implementation is trivial**
+Your Lua script only needs:
+
+- a JSON parser  
+- a few regexes  
+- a folder walker  
+- a resolver function  
+
+You don’t need a “parser” in the traditional sense — you need a **resolver pipeline**.
+
+---
+
+# 🌸 **Why this works perfectly with your local subtitle archive**
+Because:
+
+- you already have all subtitles locally  
+- you don’t need to download anything  
+- you don’t need to query AniList API  
+- you don’t need to rename files  
+- you don’t need to reorganize folders  
+
+You just need to **map** what you have to **what AniList knows**.
+
+---
+
+# 🌸 If you want, I can generate:
+- the **exact Lua module** for title/season resolution  
+- the **regex suite** for episode extraction  
+- the **resolver logic** for matching to anime-offline-database  
+- the **coverage checker**  
+- the **final report generator**  
+
+Just tell me which part you want next.

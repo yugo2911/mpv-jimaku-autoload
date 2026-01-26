@@ -1,0 +1,15 @@
+Torrent Parser
+ ├── Parse filename
+ │     ├── Title → "Jujutsu Kaisen"
+ │     └── Episode → 51
+ ├── Normalize title → romaji
+ ├── AniList search(title)
+ │     ├── Filter format=TV
+ │     ├── Sort by release date
+ │     └── Build cumulative episode ranges
+ ├── Determine season from episode
+ │     ├── S1: 1–24
+ │     ├── S2: 25–48
+ │     └── S3: 49–72 → match
+ ├── Extract AniList ID for S3
+ └── Query Jimaku using AniList ID + episode
