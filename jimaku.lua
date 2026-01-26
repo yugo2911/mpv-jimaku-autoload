@@ -427,22 +427,6 @@ local function parse_filename(filename)
     -- First, remove parenthetical content (often Japanese duplicates or extra info)
     title = title:gsub("%s*%([^%)]+%)", "")
     title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-    
-    -- Remove arc/part names that come after main title (common pattern: "Title - Subtitle - Part")
-    if title:match("^(.-)%s+%-%s+") then
-        local base_title = title:match("^(.-)%s+%-%s+")
-        -- Check if what follows looks like an arc name (Japanese text, Part, Zenpen, etc.)
-        local subtitle = title:match("^.-%s+%-%s+(.+)$")
-        if subtitle and (subtitle:match("[一-龯ぁ-ゔァ-ヴ]") or -- Japanese characters
-                        subtitle:lower():match("part") or 
-                        subtitle:lower():match("hen$") or  -- Common arc suffix
-                        subtitle:lower():match("zenpen") or
-                        subtitle:lower():match("kouhen") or
-                        subtitle:lower():match("special")) then
-            title = base_title
-            title = title:gsub("%s+$", "")
-        end
-    end
 
     local result = {
         title = title,
