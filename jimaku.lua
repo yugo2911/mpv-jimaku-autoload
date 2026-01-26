@@ -349,12 +349,18 @@ local function parse_filename(filename)
 
     -- Pattern B: Explicit Episode Tag (e.g., - 01 or Ep 01)
     if not episode then
-        local t, ep = content:match("^(.-)%s+%-%s+(%d+%.?%d*)")
-        if not t then
-            t, ep = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
-        end
-        if t and ep then
-            title, episode = t, ep
+        -- Handle titles with multiple dashes like "Gintama - 3-nen Z-gumi - 12"
+        -- We look for the LAST occurrence of " - Number"
+        local t_multi, ep_multi = content:match("^(.-)%s+%-%s+(%d+%.?%d*)[^%-]*$")
+        
+        if t_multi and ep_multi then
+            title, episode = t_multi, ep_multi
+        else
+            -- Fallback to standard Ep 01 or Episode 01
+            local t, ep = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
+            if t and ep then
+                title, episode = t, ep
+            end
         end
     end
 
@@ -435,7 +441,6 @@ local function parse_filename(filename)
 
     return result
 end
-
 -------------------------------------------------------------------------------
 -- PARSER TEST MODE
 -------------------------------------------------------------------------------
