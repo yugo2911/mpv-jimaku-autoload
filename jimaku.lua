@@ -295,152 +295,143 @@ local function is_special(episode_str, content)
     return combined:match("sp") or combined:match("special") or combined:match("ova") or combined:match("ovd")
 end
 
--- Parse a filename with multiple pattern attempts
+local function roman_to_int(s)
+    local romans = {I = 1, V = 5, X = 10}
+    local res, prev = 0, 0
+    s = s:upper()
+    for i = #s, 1, -1 do
+        local curr = romans[s:sub(i, i)]
+        if curr then
+            res = res + (curr < prev and -curr or curr)
+            prev = curr
+        end
+    end
+    return res > 0 and res or nil
+end
+
 local function parse_filename(filename)
+    -- 1. Log original filename immediately for traceability
     local original_raw = filename
+    debug_log("-------------------------------------------")
+    debug_log("INPUT FILENAME: " .. original_raw)
+
+    -- Preprocessing using your existing helper
     filename = maybe_reverse(filename)
     
     local title, episode, season, quality
     local release_group = "unknown"
-    local raw_content
     
-    -- 1. Strip file extension
-    filename = filename:gsub("%.%w%w%w?$", "")
+    -- Strip file extension and path (Handle both / and \ for Windows compatibility)
+    local no_ext = filename:gsub("%.%w%w%w?$", "")
+    local clean_name = no_ext:match("^.+[/\\](.+)$") or no_ext
     
-    -- 2. Extract Release Group (Bracket start)
-    local group_match, content_match = filename:match("^%[([^%]]+)%]%s*(.+)$")
-    if not group_match then
-        content_match = filename
-    else
+    -- 2. Extract Release Group [Group Name]
+    local group_match, content = clean_name:match("^%[([^%]]+)%]%s*(.+)$")
+    if group_match then
         release_group = group_match
+    else
+        content = clean_name
     end
-    raw_content = content_match
 
-    -- PATTERN MATCHING LOGIC (Case insensitive checks where possible)
+    -- 3. HEURISTIC CASCADE (High confidence to Low confidence)
     
-    -- S##E## or S##e## (Standard)
-    if not title then
-        title, season, episode = raw_content:match("^(.-)[%s%.%_][Ss](%d+)[Ee](%d+)")
+    -- Pattern A: Standard SxxExx or Sxx - Exx (e.g., S02E01, S2 - 01)
+    local s, e = content:match("[Ss](%d+)[%s%.%_]*[Ee](%d+%.?%d*)")
+    if not s then
+         s, e = content:match("[Ss](%d+)%s*-%s*(%d+%.?%d*)")
     end
     
-    -- S# - Episode (SubsPlease/Inka Style) - MOVED BEFORE Season Pack to take priority
-    if not title then
-        title, season, episode = raw_content:match("^(.-)[%s%.%_][Ss](%d+)[%s%.%_]+%-[%s%.%_]+(%d+)")
+    if s and e then
+        season = tonumber(s)
+        episode = e
+        title = content:match("^(.-)[%s%.%_]*[Ss]%d+[Ee]%d+") or content:match("^(.-)[%s%.%_]*[Ss]%d+%s*%-")
     end
-    
-    -- Season Pack (No Episode) - e.g. Title.S01.1080p - ONLY if no dash follows
-    if not title then
-        local temp_title, temp_season = raw_content:match("^(.-)[%s%.%_][Ss](%d+)[%s%.%_]")
-        -- Make sure it's not "S2 - 02" pattern (which has dash)
-        if temp_title and temp_season and not raw_content:match("^.-[%s%.%_][Ss]%d+[%s%.%_]*%-") then
-            title = temp_title
-            season = temp_season
-            episode = "PACK"
+
+    -- Pattern B: Explicit Episode Tag (e.g., - 01 or Ep 01)
+    if not episode then
+        local t, ep = content:match("^(.-)%s+%-%s+(%d+%.?%d*)")
+        if not t then
+            t, ep = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
+        end
+        if t and ep then
+            title, episode = t, ep
         end
     end
 
-    -- Explicit "Episode ##"
-    if not title then
-        title, episode = raw_content:match("^(.-)[%s%.%_]Episode[%s%.%_]+(%d+)")
-    end
-
-    -- Title - Episode (Standard HyZen/Saizen with underscores)
-    if not title then
-        title, episode = raw_content:match("^(.-)%s*%-%s*(%d+)")
-        -- Mark as continuous numbering (no explicit season in filename)
-        if title and episode then
-            season = nil  -- Don't assume S1 for continuous numbering
+    -- Pattern C: Loose Number (e.g., Title 01)
+    if not episode then
+        local t, ep = content:match("^(.-)%s+(%d+%.?%d*)$")
+        if t and ep then
+            title, episode = t, ep
         end
     end
 
-    -- Underscore fallback: Title_-_Episode_
-    if not title then
-        title, episode = raw_content:match("^(.-)%_?%-%_?(%d+)")
-        if title and episode then
-            season = nil  -- Don't assume S1 for continuous numbering
-        end
-    end
-
-    -- Movie style with Year (Title 2014)
-    if not title then
-        local year
-        title, year = raw_content:match("^(.-)[%s%.%_]+(%d%d%d%d)")
-        if title and tonumber(year) > 1950 and tonumber(year) < 2030 then
-            episode = "1"
-        else
-            title = nil -- Reset if year is invalid
-        end
-    end
-
-    -- Failsafe: Group + Title (Last word before quality/hash)
-    if not title then
-        title, episode = raw_content:match("^(.-)[%s%.%_]+(%d+)[%s%.%_]*%[")
-    end
+    -- 4. CLEANUP & SEASON DETECTION
+    if not title then title = content end
     
-    -- Final fallback: Just take the title before any bracket or parenthesis
-    if not title then
-        title = raw_content:match("^(.-)%s*%[") or raw_content:match("^(.-)%s*%(")
-        episode = "1"
-    end
-    
-    -- If we still have nothing, the line is truly unparseable by current logic
-    if not title or title == "" then
-        debug_log("FAILED TO PARSE: " .. original_raw, true)
-        return nil
-    end
-    
-    -- Normalization
+    -- Remove trailing dashes, underscores, or dots often left by pattern splits
+    title = title:gsub("[%s%-%_%.]+$", "")
     title = normalize_title(title)
-    episode = clean_episode(episode)
-    quality = extract_quality(raw_content)
-    
-    -- Post-process: Extract season from title if not found in pattern
+
+    -- Detect Season from Roman Numerals (e.g., "Overlord II" -> Season 2)
     if not season then
-        -- Check for "Season 2", "2nd Season", "3rd Season" etc. in title
-        season = title:match("(%d+)nd%s+[Ss]eason") or 
-                 title:match("(%d+)rd%s+[Ss]eason") or
-                 title:match("(%d+)th%s+[Ss]eason") or
-                 title:match("[Ss]eason%s+(%d+)")
-        
-        -- If found, remove it from title
-        if season then
-            title = title:gsub("%d+nd%s+[Ss]eason", "")
-            title = title:gsub("%d+rd%s+[Ss]eason", "")
-            title = title:gsub("%d+th%s+[Ss]eason", "")
-            title = title:gsub("[Ss]eason%s+%d+", "")
-            title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-        else
-            -- Check for title ending in space + single digit (e.g. "Anime Title 2")
-            local temp_season = title:match("%s+(%d)$")
-            if temp_season and tonumber(temp_season) >= 2 and tonumber(temp_season) <= 9 then
-                season = temp_season
-                title = title:gsub("%s+%d$", "")
-            else
-                -- Last resort: check for S1, S2 pattern in title
-                season = title:match("[%s%.%_][Ss](%d+)")
+        local r_map = {I=1, II=2, III=3, IV=4, V=5, VI=6, VII=7, VIII=8, IX=9, X=10}
+        local roman = title:match("%s([IVXivx]+)$")
+        if roman and r_map[roman:upper()] then
+            season = r_map[roman:upper()]
+            title = title:gsub("%s" .. roman .. "$", "")
+        end
+    end
+    
+    -- Detect Season from Short "S" notation (e.g. "Oshi no Ko S3" -> Season 3)
+    if not season then
+        local s_num = title:match("[%s%p][Ss](%d+)$")
+        if s_num then
+            season = tonumber(s_num)
+            title = title:gsub("[%s%p][Ss]%d+$", "")
+        end
+    end
+
+    -- NEW: Detect Loose Season Number (e.g., "Mato Seihei no Slave 2")
+    -- Only triggers if the title ends in a number and we don't have a season yet
+    if not season then
+        local loose_s = title:match("%s(%d+)$")
+        if loose_s then
+            -- Safety: Only treat as season if title is longer than just the number
+            -- (Prevents "22/7" from losing its "7")
+            if #title > #loose_s + 2 then
+                season = tonumber(loose_s)
+                title = title:gsub("%s%d+$", "")
             end
         end
     end
-    
-    -- Clean up subtitle artifacts for better AniList matching
-    -- Remove parenthetical content (often Japanese duplicates or extra info)
-    title = title:gsub("%s*%([^%)]+%)", "")
+
+    -- Detect Season from Keywords (e.g., "2nd Season")
+    if not season then
+        local k_season = title:match("[Ss]eason%s+(%d+)") or title:match("(%d+)[ndrt][dh]%s+[Ss]eason")
+        if k_season then
+            season = tonumber(k_season)
+            title = title:gsub("%s*%(?%d*[ndrt][dh]%s+[Ss]eason%)?", "")
+            title = title:gsub("%s*%(?[Ss]eason%s+%d+%)?", "")
+        end
+    end
+
+    -- Final cleanup
     title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    episode = episode or "1"
+    quality = extract_quality(content)
 
     local result = {
         title = title,
-        season = tonumber(season),  -- Can be nil for continuous numbering
-        episode = episode or "1",
+        season = season,
+        episode = episode,
         quality = quality or "unknown",
-        is_special = is_special(episode, raw_content),
+        is_special = is_special(episode, content),
         group = release_group
     }
 
-    debug_log(string.format("Parsed: [%s] %s E%s | %s", 
-        result.title, 
-        result.season and string.format("S%02d", result.season) or "Continuous",
-        result.episode or "?", 
-        original_raw))
+    debug_log(string.format("PARSE RESULT:\n  Title:   [%s]\n  Season:  %s\n  Episode: %s\n  Group:   %s", 
+        result.title, result.season or "N/A", result.episode, result.group))
 
     return result
 end
