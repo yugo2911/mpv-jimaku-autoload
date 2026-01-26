@@ -278,6 +278,7 @@ local function normalize_title(title)
     if not title then return "" end
     -- Replace underscores and dots with spaces
     title = title:gsub("[%._]", " ")
+    
     -- Clean up multiple spaces
     title = title:gsub("%s+", " ")
     title = title:gsub("^%s+", ""):gsub("%s+$", "")
@@ -304,7 +305,6 @@ end
 -- Clean episode string
 local function clean_episode(episode_str)
     if not episode_str then return "" end
-    -- FIX: For "ONE PIECE", remove trailing dots and resolution leftovers
     episode_str = episode_str:gsub("%.%d%d%d%d?p?$", "")
     episode_str = episode_str:gsub("^%((.-)%)$", "%1")
     episode_str = episode_str:gsub("[%s%.%-_%[%]]+$", "")
@@ -316,41 +316,23 @@ end
 local function is_special(episode_str, content)
     local combined = (episode_str or "") .. " " .. (content or "")
     combined = combined:lower()
-    return combined:match("sp") or combined:match("special") or combined:match("ova") or combined:match("ovd")
-end
-
-local function roman_to_int(s)
-    local romans = {I = 1, V = 5, X = 10}
-    local res, prev = 0, 0
-    s = s:upper()
-    for i = #s, 1, -1 do
-        local curr = romans[s:sub(i, i)]
-        if curr then
-            res = res + (curr < prev and -curr or curr)
-            prev = curr
-        end
-    end
-    return res > 0 and res or nil
+    return combined:match("sp") or combined:match("special") or combined:match("ova") or combined:match("ovd") or combined:match("pv")
 end
 
 local function parse_filename(filename)
-    -- Start buffering logs for this run
     log_buffer = {}
     buffered_log("-------------------------------------------")
     buffered_log("INPUT FILENAME: " .. filename)
 
-    -- Preprocessing using your existing helper
     filename = maybe_reverse(filename)
     
     local title, episode, season, quality
     local release_group = "unknown"
     
-    -- Strip file extension and path (Handle both / and \ for Windows compatibility)
     local no_ext = filename:gsub("%.%w%w%w?$", "")
     local clean_name = no_ext:match("^.+[/\\](.+)$") or no_ext
     
     -- 2. Extract Release Group [Group Name]
-    -- FIX: For "ONE PIECE ... -VARYG", check for group tags at the end
     local group_match, content = clean_name:match("^%[([^%]]+)%]%s*(.+)$")
     if group_match then
         release_group = group_match
@@ -362,10 +344,9 @@ local function parse_filename(filename)
         end
     end
 
-    -- 3. HEURISTIC CASCADE (High confidence to Low confidence)
+    -- 3. HEURISTIC CASCADE
     
-    -- Pattern A: Standard SxxExx or Sxx - Exx (e.g., S02E01, S2 - 01)
-    -- FIX: For "ONE PIECE", prevent capturing ".1080" as part of the episode
+    -- Pattern A: Standard SxxExx or Sxx - Exx
     local s, e = content:match("[Ss](%d+)[%s%.%_]*[Ee](%d+)")
     if not s then
          s, e = content:match("[Ss](%d+)%s*-%s*(%d+)")
@@ -377,31 +358,36 @@ local function parse_filename(filename)
         title = content:match("^(.-)[%s%.%_]*[Ss]%d+[Ee]%d+") or content:match("^(.-)[%s%.%_]*[Ss]%d+%s*%-")
     end
 
-    -- Pattern B: Explicit Episode Tag (e.g., - 01 or Ep 01)
+    -- Pattern B: Explicit Episode/Special Tag
     if not episode then
-        -- Find all occurrences of " - Number" and pick the last one that isn't clearly metadata
-        -- This fixes "Gintama - 3-nen ... - 12"
-        local last_t, last_ep
-        for t, ep in content:gmatch("(.-)%s+%-%s+(%d+%.?%d*)%s*") do
-            last_t, last_ep = t, ep
-        end
-        
-        if last_t and last_ep then
-            title, episode = last_t, clean_episode(last_ep)
+        local t_sp, sp_val = content:match("^(.-)%s*[Ss][Pp](%d+)")
+        if t_sp and sp_val then
+            title, episode = t_sp, clean_episode(sp_val)
         else
-            -- Fallback to standard Ep 01 or Episode 01
-            local t, ep = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
-            if t and ep then
-                title, episode = t, clean_episode(ep)
+            local t_ep, ep_val = content:match("^(.-)%s*[Ee]pisode%s*(%d+%.?%d*)")
+            if not t_ep then
+                t_ep, ep_val = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
+            end
+            
+            if t_ep and ep_val then
+                title, episode = t_ep, clean_episode(ep_val)
+            else
+                local last_t, last_ep
+                for t, ep in content:gmatch("(.-)%s+%-%s+(%d+%.?%d*)%s*") do
+                    last_t, last_ep = t, ep
+                end
+                
+                if last_t and last_ep then
+                    title, episode = last_t, clean_episode(last_ep)
+                end
             end
         end
     end
 
-    -- Pattern C: Loose Number (e.g., Title 01)
+    -- Pattern C: Loose Number
     if not episode then
         local t, ep = content:match("^(.-)%s+(%d+%.?%d*)$")
         if not t then
-            -- Try to find a number before tags/quality brackets
             t, ep = content:match("^(.-)%s+(%d+%.?%d*)%s*[%[%(]")
         end
         if t and ep then
@@ -412,11 +398,19 @@ local function parse_filename(filename)
     -- 4. CLEANUP & SEASON DETECTION
     if not title then title = content end
     
-    -- Remove trailing dashes, underscores, or dots often left by pattern splits
+    -- NEW: Specific fix for Jujutsu Kaisen S3 style (Title - S3 - Part X)
+    -- Capture Season if it's explicitly labeled with S
+    if not season then
+        local s_label = title:match("%-%s*[Ss](%d+)%s*%-") or title:match("%s[Ss](%d+)%s")
+        if s_label then
+            season = tonumber(s_label)
+        end
+    end
+
     title = title:gsub("[%s%-%_%.]+$", "")
     title = normalize_title(title)
 
-    -- Detect Season from Roman Numerals (e.g., "Overlord II" -> Season 2)
+    -- Detect Season from Roman Numerals
     if not season then
         local r_map = {I=1, II=2, III=3, IV=4, V=5, VI=6, VII=7, VIII=8, IX=9, X=10}
         local roman = title:match("%s([IVXivx]+)$")
@@ -426,7 +420,7 @@ local function parse_filename(filename)
         end
     end
     
-    -- Detect Season from Short "S" notation (e.g. "Oshi no Ko S3" -> Season 3)
+    -- Detect Season from Short "S" notation
     if not season then
         local s_num = title:match("[%s%p][Ss](%d+)$")
         if s_num then
@@ -435,7 +429,7 @@ local function parse_filename(filename)
         end
     end
 
-    -- NEW: Detect Loose Season Number (e.g., "Mato Seihei no Slave 2")
+    -- Detect Loose Season Number
     if not season then
         local is_part = title:match("[Pp]art%s+(%d+)$")
         if not is_part then
@@ -449,7 +443,7 @@ local function parse_filename(filename)
         end
     end
 
-    -- Detect Season from Keywords (e.g., "2nd Season")
+    -- Detect Season from Keywords
     if not season then
         local k_season = title:match("[Ss]eason%s+(%d+)") or title:match("(%d+)[ndrt][dh]%s+[Ss]eason")
         if k_season then
@@ -476,7 +470,6 @@ local function parse_filename(filename)
     buffered_log(string.format("PARSE RESULT:\n  Title:   [%s]\n  Season:  %s\n  Episode: %s\n  Group:   %s", 
         result.title, result.season or "N/A", result.episode, result.group))
 
-    -- Single disk write for the entire parse sequence
     flush_log()
 
     return result
