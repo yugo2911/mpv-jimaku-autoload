@@ -317,37 +317,31 @@ local function roman_to_int(s)
 end
 
 local function parse_filename(filename)
-    -- Log original filename for traceability
+    -- 1. Log original filename immediately for traceability
     local original_raw = filename
     debug_log("-------------------------------------------")
     debug_log("INPUT FILENAME: " .. tostring(original_raw))
 
-    -- Preprocessing
+    -- Preprocessing using your existing helper
     filename = maybe_reverse(filename)
 
     local title, episode, season, quality
     local release_group = "unknown"
 
-    -- Strip last extension robustly and handle path
-    local no_ext = filename:gsub("%.[^%.]+$", "")
+    -- Strip file extension and path (Handle both / and \ for Windows compatibility)
+    local no_ext = filename:gsub("%.%w%w%w?$", "")
     local clean_name = no_ext:match("^.+[/\\](.+)$") or no_ext
 
-    -- 1) Extract release group (allow dots, dashes, spaces; space optional)
+    -- 2. Extract Release Group [Group Name] (allow dots, dashes, spaces; space optional)
     local group, rest = clean_name:match("^%[([%w%._%- ]+)%]%s*(.*)$")
-    if group then
+    if group and rest and rest ~= "" then
         release_group = group
-        content = (rest ~= "" and rest) or ""
+        content = rest
     else
         content = clean_name
     end
 
-    -- Trim leading/trailing separators from content for safer matching
-    content = content:gsub("^%s*[%._%-]+", ""):gsub("[%._%-]+%s*$", "")
-
-    -- Early quality extraction to reduce ambiguity
-    quality = extract_quality(content)
-
-    -- HEURISTIC CASCADE (High confidence to Low confidence)
+    -- 3. HEURISTIC CASCADE (High confidence to Low confidence)
 
     -- Pattern A: Standard SxxExx (require token boundaries where possible)
     local s, e = content:match("[^%w][Ss](%d+)[%s%._%-]*[Ee](%d+%.?%d*)[^%w]")
@@ -358,9 +352,9 @@ local function parse_filename(filename)
     if s and e then
         season = tonumber(s)
         episode = e
+        -- Safer title extraction: require separator before SxxExx token
         title = content:match("^(.-)[%s%._%-]+[Ss]%d+[%s%._%-]*[Ee]%d+") or
-                content:match("^(.-)[%s%._%-]+[Ss]%d+%s*%-") or
-                content:match("^(.-)[%s%._%-]*[Ss]%d+[Ee]%d+")
+                content:match("^(.-)[%s%._%-]+[Ss]%d+%s*%-")
     end
 
     -- Pattern B: Dash-based episode detection (handles -, –, —)
@@ -374,7 +368,7 @@ local function parse_filename(filename)
     -- Pattern C: Explicit Episode Tag (Ep 01, E01, etc.)
     if not episode then
         local t, ep = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
-        if not t or not ep then
+        if not t then
             t, ep = content:match("^(.-)%s*[Ee]%.?%s*(%d+%.?%d*)")
         end
         if t and ep then
@@ -382,46 +376,32 @@ local function parse_filename(filename)
         end
     end
 
-    -- Pattern D: Underscore/dot separated numeric token or trailing number (Title 01)
+    -- Pattern D: Loose Number at end (Title 01)
     if not episode then
-        local t, ep = content:match("^(.-)[%._]%s*(%d+%.?%d*)%s*$")
-        if not t then
-            t, ep = content:match("^(.-)%s+(%d+%.?%d*)%s*$")
-        end
+        local t, ep = content:match("^(.-)%s+(%d+%.?%d*)%s*$")
         if t and ep then
             title, episode = t, ep
         end
     end
 
-    -- Fallback: try to parse common filename tokens like "EP01" or "#01"
-    if not episode then
-        local ep = content:match("[Ee][Pp]?%s*(%d+%.?%d*)") or content:match("[#＃](%d+)")
-        if ep then
-            episode = ep
-            -- attempt to extract title before the token
-            local t = content:match("^(.-)%s*[#＃EePp%p]%s*%d+")
-            if t and t ~= "" then title = t end
-        end
-    end
-
-    -- CLEANUP & SEASON DETECTION
+    -- 4. CLEANUP & SEASON DETECTION
     if not title then title = content end
 
-    -- Remove trailing separators left by pattern splits
+    -- Remove trailing dashes, underscores, or dots often left by pattern splits
     title = title:gsub("[%s%-%_%.]+$", "")
     title = normalize_title(title)
 
-    -- Detect Season from Roman Numerals at end (e.g., "Overlord II")
+    -- Detect Season from Roman Numerals (e.g., "Overlord II" -> Season 2)
     if not season then
         local roman = title:match("%s([IVXLCDMivxlcdm]+)$")
         local r_val = roman and roman_to_int(roman) or nil
-        if r_val and r_val >= 1 and r_val <= 20 then
+        if r_val and r_val <= 20 then
             season = r_val
             title = title:gsub("%s" .. roman .. "$", "")
         end
     end
 
-    -- Detect Season from short "S" notation at end (e.g., "Oshi no Ko S3")
+    -- Detect Season from Short "S" notation at end (e.g. "Oshi no Ko S3")
     if not season then
         local s_num = title:match("[%s%p][Ss](%d+)$")
         if s_num then
@@ -430,12 +410,13 @@ local function parse_filename(filename)
         end
     end
 
-    -- Safe loose season detection: only small season numbers and avoid numeric-first titles
+    -- Safe loose season detection: only small season numbers and avoid numeric titles
     if not season then
         local loose = title:match(" (%d+)$")
         if loose then
             local n = tonumber(loose)
             if n and n >= 1 and n <= 6 then
+                -- Avoid numeric-first titles and fraction-like titles (22/7)
                 if not title:match("^%d") and not title:match("%d/%d") then
                     season = n
                     title = title:gsub(" %d+$", "")
@@ -457,7 +438,7 @@ local function parse_filename(filename)
     -- Final cleanup
     title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
     episode = episode or "1"
-    quality = quality or extract_quality(content)
+    quality = extract_quality(content)
 
     local result = {
         title = title,
@@ -473,7 +454,6 @@ local function parse_filename(filename)
 
     return result
 end
-
 
 
 -------------------------------------------------------------------------------

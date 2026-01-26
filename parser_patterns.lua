@@ -13,7 +13,7 @@ local function sanitize_title(title)
     title = title:gsub("^%s*[%[%(].-[%]%)]%s*", "") -- Leading group
     title = title:gsub("%s*[%[%(].-[%]%)]%s*$", "") -- Trailing group
     
-    -- 2. Strip trailing versions/resolutions (v2, 1080p, etc)
+    -- 2. Strip trailing versions/resolutions/metadata
     title = title:gsub("%s*[%[%(]?%d+p[%]%)%]?$", "")
     title = title:gsub("%s*[vV]%d+$", "")
     
@@ -27,14 +27,6 @@ local function sanitize_title(title)
     title = title:gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
     
     return title
-end
-
-local function debug_pattern_hit(pattern_name, confidence, captures)
-    if not DEBUG_PATTERNS then return end
-    print(string.format(
-        "HIT: %-30s | Conf: %d | Caps: [%s]",
-        pattern_name, confidence, table.concat(captures, ", ")
-    ))
 end
 
 -- ==================================================================================
@@ -87,25 +79,41 @@ local PATTERNS = {
     },
 
     -- =========================================================================
-    -- TIER 2: MOVIES & SPECIALS (Handling your Nil results)
+    -- TIER 2: SPECIALS & MOVIES (Handling your Nil results)
     -- =========================================================================
 
     -- [Group] Title - Movie [Hash]
     {
         name = "anime_movie_with_hash",
         confidence = 95,
-        regex = "^%[(.-)%]%s*(.-)%s+[%-–—]%s+[Mm]ovie%s+.*%[([0-9A-Fa-f]{8})%]",
+        regex = "^%[(.-)%]%s*(.-)%s+[%-–—]%s-[Mm]ovie%s+.*%[([0-9A-Fa-f]{8})%]",
         fields = { "group", "title", "hash" },
         is_movie = true
     },
 
-    -- [Group] Title - Special ## [Hash] (e.g. SP11)
+    -- [Group] Title - Special ## [Hash] (e.g. SP11, Egghead SP11)
     {
         name = "anime_special_numbered_hash",
         confidence = 95,
-        regex = "^%[(.-)%]%s*(.-)%s+[%-–—]%s+[Ss][Pp]?(%d+)%s+.*%[([0-9A-Fa-f]{8})%]",
+        regex = "^%[(.-)%]%s*(.-)%s+[%-–—]%s-[Ss][Pp]?(%d+)%s+.*%[([0-9A-Fa-f]{8})%]",
         fields = { "group", "title", "episode", "hash" },
         is_special = true
+    },
+
+    -- Title - 03 [Metadata.mkv].rar (Bilibili/Crunchy style batches)
+    {
+        name = "anime_loose_metadata_rar",
+        confidence = 92,
+        regex = "^(.-)%s+[%-–—]%s+(%d+)%s+.*%[.*%].*%.rar$",
+        fields = { "title", "absolute" }
+    },
+
+    -- Title - 01 [Group] (KingMenu/DOMO style)
+    {
+        name = "anime_trailing_group_absolute",
+        confidence = 91,
+        regex = "^(.-)%s+[%-–—]%s+(%d+)%s+.*%[(.-)%]$",
+        fields = { "title", "absolute", "group" }
     },
 
     -- Title (Year) [DVD Remux] [Hash]
@@ -116,26 +124,9 @@ local PATTERNS = {
         fields = { "group", "title", "hash" }
     },
 
-    -- Title.Year.1080p.BluRay... (Movie format)
-    {
-        name = "movie_scene_standard",
-        confidence = 88,
-        regex = "^(.-)[%.%s]+(%d%d%d%d)[%.%s]+%d%d%d%dp",
-        fields = { "title", "year" },
-        is_movie = true
-    },
-
     -- =========================================================================
     -- TIER 3: STANDARD / SCENE (SxxExx)
     -- =========================================================================
-
-    -- Title S01E01-E02
-    {
-        name = "scene_multi_verbose",
-        confidence = 95,
-        regex = "^(.-)[%s%.%_]+[Ss](%d+)[Ee](%d+)[%-%~][Ee](%d+)",
-        fields = { "title", "season", "episode", "episode_end" }
-    },
 
     -- Title S01E01
     {
@@ -145,19 +136,37 @@ local PATTERNS = {
         fields = { "title", "season", "episode" }
     },
 
-    -- =========================================================================
-    -- TIER 4: TEXTUAL & LOOSE
-    -- =========================================================================
-
-    -- Title - Episode 05
+    -- Title.Year.1080p.BluRay (Movie format)
     {
-        name = "text_verbose_episode_only",
-        confidence = 82,
-        regex = "^(.-)[%s%.%_]+[Ee]pisode[%s%.%_]+(%d+)",
-        fields = { "title", "absolute" }
+        name = "movie_scene_standard",
+        confidence = 88,
+        regex = "^(.-)[%.%s]+(%d%d%d%d)[%.%s]+%d%d%d%dp",
+        fields = { "title", "year" },
+        is_movie = true
     },
 
-    -- Last ditch: Just a group and a title and a hash at the end
+    -- =========================================================================
+    -- TIER 4: LOOSE / LAST RESORT
+    -- =========================================================================
+
+    -- [SubsPlease] Title. (1080p) [Hash] (No episode number = Movie/One-shot)
+    {
+        name = "anime_one_shot_hash",
+        confidence = 85,
+        regex = "^%[(.-)%]%s*(.-)%.?%s*%(%d+p%)%s*%[([0-9A-Fa-f]{8})%]",
+        fields = { "group", "title", "hash" }
+    },
+
+    -- Title - OVA 01
+    {
+        name = "anime_ova_numbered",
+        confidence = 85,
+        regex = "^(.-)%s+[Oo][Vv][Aa]%s+(%d+)",
+        fields = { "title", "absolute" },
+        is_special = true
+    },
+
+    -- Final Fallback: [Group] Title [Hash]
     {
         name = "anime_group_title_hash_only",
         confidence = 60,
@@ -176,11 +185,10 @@ local function parse_sxe(str)
 end
 
 function M.run_patterns(filename, logger)
-    local clean_name = filename:gsub("%.[Mm][Kk][Vv]$", ""):gsub("%.[Mm][Pp]4$", ""):gsub("%.[Aa][Vv][Ii]$", "")
+    -- Clean multiple levels of extensions/wrappers
+    local clean_name = filename:gsub("%.rar$", ""):gsub("%.mkv%]%.rar$", ""):gsub("%.mkv$", ""):gsub("%.mp4$", ""):gsub("%.avi$", "")
 
     for _, p in ipairs(PATTERNS) do
-        -- Handle Lua's lack of {8} in regex by expanding the hash pattern manually if needed
-        -- or using a simpler check. For now, we use a custom check in the loop.
         local regex = p.regex
         local captures = { clean_name:match(regex) }
 
@@ -222,11 +230,6 @@ function M.run_patterns(filename, logger)
     end
 
     return nil
-end
-
-function M.test_patterns()
-    -- Internal unit tests can go here
-    print("Run parser_test.lua for full test suite.")
 end
 
 return M
