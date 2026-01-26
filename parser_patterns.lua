@@ -1,444 +1,1051 @@
+@ -0,0 +1,1053 @@
 local M = {}
 
 local DEBUG_PATTERNS = false
-
--- ==================================================================================
--- HELPER FUNCTIONS
--- ==================================================================================
-
--- S2,S3 2nd,3rd,4th,5th, etc season detection
-local function season_detection
-
-    -- Placeholder for future season detection logic if needed
-    return nil
-end
-
--- Extract data if its offered in the title
--- MATCH RESULT: group=H3LL, episode=03, season=03, pattern=anime_group_strict_sxxexx, is_movie=false, is_special=false, confidence=100, title=Jujutsu Kaisen - The Culling Game (呪術廻戦「死滅回游 前編」)
-
--- FIX
--- MATCH RESULT: absolute=3, group=SubsPlease, pattern=fallback_group_title_num, is_movie=false, is_special=false, confidence=60, title=Gintama
--- MATCH RESULT: group=Erai-raws, pattern=anime_movie_no_hash, is_movie=true, is_special=false, confidence=90, title=Seishun Buta Yarou wa Odekake Sister no Yume o Minai
---
-
 local function sanitize_title(title)
-    if not title then return nil end
+    if not title then return title end
     
-    -- 1. Strip Release Group if it wasn't caught (e.g. "Title [Group]")
-    title = title:gsub("^%s*[%[%(].-[%]%)]%s*", "") 
-    title = title:gsub("%s*[%[%(].-[%]%)]%s*$", "") 
+    -- 1. Remove trailing dashes/separators specifically
+    -- This cleans up: "Title - " -> "Title"
+    title = title:gsub("%s*[%-–—]%s*$", "") 
     
-    -- 2. Strip trailing versions/resolutions/extensions
-    -- FIXED: In Lua patterns, to include ']' in a set, it MUST be the first character.
-    title = title:gsub("%s*[%[%(]?%d+p[]%)]%]?$", "")
-    title = title:gsub("%s*[vV]%d+$", "")
-    title = title:gsub("%.%a%a%a$", "") 
+    -- 2. NEW: Remove common trailing version/release info
+    -- This cleans: "Title v2" or "Title (v3)" -> "Title"
+    title = title:gsub("%s*[%(%[]?[Vv]%d+[%)%]]?$", "")
     
-    -- 3. Replace dots/underscores with spaces
+    -- 4. Replace dots and underscores with spaces
     title = title:gsub("[%.%_]", " ")
     
-    -- 4. Strip specific keywords that aren't the title
-    title = title:gsub("%s+[Ss]eason%s+%d+$", "")
-    title = title:gsub("%s+[Mm]ovie$", "")
-    title = title:gsub("%s+[Tt]he%s+[Mm]ovie$", "")
-    title = title:gsub("%s+[%-–—]%s*$", "") -- Trailing dashes
+    -- 5. NEW: Remove any leftover empty brackets or parentheses
+    -- This cleans: "Title ()" -> "Title"
+    title = title:gsub("%s*%b()", function(s) return s == "()" and "" or nil end)
+    title = title:gsub("%s*%b[]", function(s) return s == "[]" and "" or nil end)
     
-    -- 5. Trim and normalize spaces
-    title = title:gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+    -- 6. Collapse multiple spaces and trim
+    title = title:gsub("%s+", " ")
+    title = title:match("^%s*(.-)%s*$")
     
     return title
 end
 
--- ==================================================================================
--- PATTERN DEFINITIONS
--- ==================================================================================
+local function debug_pattern_hit(pattern_name, confidence, captures)
+    if not DEBUG_PATTERNS then return end
+    print(string.format(
+        "PATTERN MATCHED: %-28s | confidence=%d | captures=[%s]",
+        pattern_name, confidence, table.concat(captures, ", ")
+    ))
+end
 
--- ==================================================================================
--- PATTERN DEFINITIONS (EXPANDED)
--- ==================================================================================
-
-local PATTERNS = {
-    -- =========================================================================
-    -- TIER 1: STRICT ANIME / BATCHES / SxxExx
-    -- =========================================================================
-
-    -- [Group] Title - S01E02
+    -- Pattern cascade (Reorganized by Confidence)
+    local PATTERNS = {
+    -- 1) [Group] Title 123 (absolute) (Season+Episode in parens)
     {
-        name = "anime_group_strict_sxxexx",
+        name = "anime_subgroup_absolute_with_sxxexx_paren",
         confidence = 100,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+([Ss]%d+[Ee]%d+)%s*.*$", 
-        fields = { "group", "title", "sxe" } 
+        regex = "^%[(.-)%]%s*(.-)%s+([0-9][0-9][0-9]%.?%d?)%s*%(%s*[Ss](%d+)[Ee](%d+)%s*%)",
+        fields = { "group", "title", "absolute", "season", "episode" }
     },
-
-    -- [Group] Title S01E02 (no dash)
     {
-        name = "anime_group_sxxexx_no_dash",
-        confidence = 100,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+([Ss]%d+[Ee]%d+)%s*.*$", 
-        fields = { "group", "title", "sxe" } 
-    },
-
-    -- Title.S01E02.Metadata-Group (Scene style)
-    {
-        name = "scene_dotted_sxxexx",
+        name = "subgroup_title_year_episode_metadata_hash",
         confidence = 99,
-        regex = "^(.-)%.([Ss]%d+[Ee]%d+)%.(.-)%-([%a%d%.]+)$",
-        fields = { "title", "sxe", "metadata", "group" }
+        -- Matches: [Group] Title (2025) - 10 (WEB 1080p...) [Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*%((%d%d%d%d)%)%s*[%-%–—]%s*(%d%d?)%s*%((.-)%)%s*%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "year", "episode", "metadata", "hash" }
     },
-
-    -- [Group] Title - 01-02 (Batch)
     {
-        name = "anime_group_absolute_batch",
-        confidence = 100,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s+(%d+)[%-~](%d+)%s*.*$",
-        fields = { "group", "title", "absolute", "absolute_end" }
+    name = "anime_subgroup_sxxexx_absolute",
+    confidence = 99, -- Very high confidence due to specific structure
+    -- Matches: [Group] Title - S03E04 (51)
+    regex = "^%[(.-)%]%s*(.-)%s*[%-–—]%s*[Ss](%d+)[Ee](%d+)%s*%((%d+)%)",
+    fields = { "group", "title", "season", "episode", "absolute_episode" }
     },
-
-    -- [Group] Title - 01v2 [Hash] (Revised episode)
     {
-        name = "anime_group_absolute_version",
+        name = "subgroup_title_sxxexx_metadata_hash",
         confidence = 98,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s+(%d+)[vV](%d+)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "absolute", "version", "hash" }
+        -- Matches: [Group] Title - ## (S##E##) (AMZN 1080p...) [Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d%d?)%s*%(S(%d+)E(%d+)%)%s*%((.-)%)%s*%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "episode", "season", "episode2", "metadata", "hash" }
     },
-
-    -- [Group] Title - 05 [Hash] (Standard episodic)
+    -- 2) [Group] Title - 123  (absolute)  (common fansub style)
     {
-        name = "anime_group_absolute_hash_strict",
+        name = "anime_subgroup_absolute_dash",
         confidence = 98,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s+(%d+)%s+.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "absolute", "hash" }
-    },
-
-    -- [Group] Title - 05 (No hash variant)
-    {
-        name = "anime_group_absolute_no_hash",
-        confidence = 95,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s+(%d+)%s*%[",
+        regex = "^%[(.-)%]%s*(.-)%s*[-_]%s*([0-9][0-9][0-9]%.?%d?)",
         fields = { "group", "title", "absolute" }
     },
-
-    -- (Group) Title - ## [Hash] (Parenthesis group style)
     {
-        name = "anime_parenthesis_group_absolute",
+        name = "multi_episode_range_sxxexx",
+        confidence = 98,
+        regex = "^(.-)[%s%._%-]+S(%d+)[Ee](%d+)%s*[-–—]%s*S?%d*[Ee]?(%d+)",
+        fields = { "title", "season", "episode", "episode2" }
+    },
+    {
+        name = "subgroup_title_version_metadata_hash",
+        confidence = 98,
+        -- Matches: [Group] Title - ##v# (WEB 1080p...) [Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d+)([vV]%d+)%s*%((.-)%)%s*%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "episode", "version", "metadata", "hash" }
+    },
+    {
+    name = "anime_subgroup_season_letter_dash_episode",
+    confidence = 98,
+    -- Matches: [Group] Title S2 (Metadata) - 15
+    regex = "^%[(.-)%]%s*(.-)%s+[Ss](%d+)%s*%(?(.-)%)?%s*[%-%–—]%s*(%d%d?)",
+    fields = { "group", "title", "season", "metadata", "episode" }
+    },
+    {
+    name = "anime_subgroup_roman_season_dash_episode",
+    confidence = 98,
+    -- Matches: [Group] Title II - 15
+    regex = "^%[(.-)%]%s*(.-)%s+([IVXLCDMivxlcdm]+)%s*[%-%–—]%s*(%d%d?)",
+    fields = { "group", "title", "season_roman", "episode" }
+    },
+    {
+    name = "anime_subgroup_ordinal_season",
+    confidence = 98,
+    -- Matches: [Group] Title 6th Season - 12
+    regex = "^%[(.-)%]%s*(.-)%s+(%d+)[stndrdth]+%s+[Ss]eason%s*[%-–—]%s*(%d+)",
+    fields = { "group", "title", "season", "episode" }
+    },
+    {
+    name = "anime_subgroup_sxxexx_absolute",
+    confidence = 98,
+    -- Matches: [Group] Title - S01E01 (01) [Metadata]
+    regex = "^%[(.-)%]%s*(.-)%s*[%-–—]%s*[Ss](%d+)[Ee](%d+)%s*%(%d+%)",
+    fields = { "group", "title", "season", "episode" }
+    },
+    {
+        name = "subgroup_title_episode_parenthetical_metadata_multibracket_hash",
         confidence = 97,
-        regex = "^%((.-)%)%s+(.-)%s+(%d+)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "absolute", "hash" }
+        -- Matches: [Group] Title - ## (WEB 1080p AV1 Opus) [Multi Subs][Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d%d?)%s*%((.-)%)%s*%[(.-)%]%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "episode", "metadata", "subs", "hash" }
     },
-
-    -- [Group] Title EP01 [Hash] (EP prefix)
     {
-        name = "anime_group_ep_prefix",
+        name = "subgroup_title_number_episode_parenthetical_metadata_multibracket_hash",
+        confidence = 97,
+        -- Matches: [Group] Title 3 - ## (WEB 1080p...) [Multi Subs][Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s+(%d+)%s*[%-%–—]%s*(%d%d?)%s*%((.-)%)%s*%[(.-)%]%s*%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "season", "episode", "metadata", "subs", "hash" }
+    },
+    {
+        name = "subgroup_title_parenthetical_resolution_metadata_multibracket_hash",
+        confidence = 97,
+        -- Matches: [Group] Title - ## (1080p AV1 OPUS) [MultiSubs] [Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d%d?)%s*%((%d%d%d%dp)(.-)%)%s*%[(.-)%]%s*%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "episode", "resolution", "metadata", "subs", "hash" }
+    },
+    {
+        name = "subgroup_title_episode_metadata_hash",
+        confidence = 97,
+        -- Matches: [Group] Title - ## (WEB 1080p...) [Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d%d?)%s*%((.-)%)%s*%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "episode", "metadata", "hash" }
+    },
+    {
+        name = "subgroup_title_season_episode_metadata_hash",
+        confidence = 97,
+        regex = "^%[(.-)%]%s*(.-)%s*[Ss](%d+)%s*[%-%–—]%s*(%d+)%s*%[(.-)%]%s*%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "season", "episode", "metadata", "hash" }
+    },
+    {
+        name = "anime_movie_with_metadata",
+        confidence = 97,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*[Mm]ovie%s*(%[.*%])%.%w+$",
+        fields = { "group", "title", "metadata" }
+    },
+    {
+        name = "anime_subgroup_part_episode",
+        confidence = 97,
+        regex = "^%[(.-)%]%s*(.-%s*[Pp]art%s*%d+)%s*[%-_. ]+%s*(%d%d?%d?)[%s%._%-]*%[",
+        fields = { "group", "title", "episode" }
+    },
+    {
+        name = "subgroup_title_num_episode_metadata_hash",
         confidence = 96,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[EePp]+(%d+)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "absolute", "hash" }
+        regex = "^%[(.-)%]%s*(.-)%s+(%d+)%s*[%-%–—]%s*(%d+)%s*%[(.-)%]%s*%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "season", "episode", "metadata", "hash" }
     },
-
-    -- =========================================================================
-    -- TIER 2: MOVIES & SPECIALS
-    -- =========================================================================
-
-    -- [Group] Title - Movie [Metadata][Hash]
     {
-        name = "anime_movie_with_hash",
+        name = "subgroup_title_year_movie_source_metadata_multibracket_hash",
         confidence = 96,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]?%s*[Mm]ovie%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "hash" },
-        is_movie = true
+        -- Matches: [Group] Title (Year) - Movie [Source][Resolution AV1 OPUS][MultiSub][Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*%((%d%d%d%d)%)%s*[%-%–—]%s*Movie%s*%[(.-)%]%[(.-)%]%[(.-)%]%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "year", "source", "metadata", "subs", "hash" }
     },
-
-    -- [Group] Title Movie [Dub/Metadata]
     {
-        name = "anime_movie_no_hash",
-        confidence = 90,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[Mm]ovie%s*.*",
-        fields = { "group", "title" },
-        is_movie = true
+        name = "subgroup_title_dash_special_studio_source_metadata_multibracket_hash",
+        confidence = 96,
+        -- Matches: [Group] Title - Special [Studio][Source][Resolution AV1 OPUS][MultiSub][Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*Special%s*%[(.-)%]%[(.-)%]%[(.-)%]%[(.-)%]%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "studio", "source", "metadata", "subs", "hash" }
     },
-
-    -- [Group] Title - OVA/OAD [Hash]
     {
-        name = "anime_ova_oad",
+        name = "subgroup_title_dash_episode_studio_source_metadata_multibracket_hash",
+        confidence = 96,
+        -- Matches: [Group] Title - E## [Studio][Source][Resolution AV1 OPUS][MultiSub][Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*E(%d+)%s*%[(.-)%]%[(.-)%]%[(.-)%]%[(.-)%]%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "episode", "studio", "source", "metadata", "subs", "hash" }
+    },
+    {
+        name = "subgroup_title_dash_episode_repack_studio_source_metadata_multibracket_hash",
+        confidence = 96,
+        -- Matches: [Group] Title - E## (REPACK) [Studio][Source][Resolution AV1 OPUS][MultiSub][Hash].mkv
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*E(%d+)%s*%(REPACK%)%s*%[(.-)%]%[(.-)%]%[(.-)%]%[(.-)%]%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "episode", "studio", "source", "metadata", "subs", "hash" }
+    },
+    {
+        name = "anime_subgroup_sxxexx",
+        confidence = 96,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-_. ]+[Ss](%d+)[Ee](%d+)",
+        fields = { "group", "title", "season", "episode" }
+    },
+    {
+        name = "split_episode_lettered",
+        confidence = 96,
+        regex = "^(.-)[%s%._%-]+S(%d+)[Ee](%d+)([ab])%b()?",
+        fields = { "title", "season", "episode", "split" }
+    },
+    {
+        name = "subgroup_title_season_episode_extra",
+        confidence = 96,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*S(%d+)E(%d+)%s*%(%d+%)%s*%[(%d+p)%].*%.%w+$",
+        fields = { "group", "title", "season", "episode", "resolution" }
+    },
+    {
+        name = "subgroup_title_episode_with_version_hash",
+        confidence = 96,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d+[vV]%d*)%s*%(%d+p%)%s*%[?([%x]+)%]?%.%w+$",
+        fields = { "group", "title", "episode", "hash" }
+    },
+    {
+        name = "title_year_proper_resolution_dual_codec_group",
         confidence = 95,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s*([OoAaDd][VvAaDd]+)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "special_type", "hash" },
-        is_special = true
+        -- Matches: Title.Year.PROPER.1080p.Source.DUAL.Audio.Codec-Group.mkv
+        regex = "^(.-)%.(%d%d%d%d)%.PROPER%.(%d%d%d%dp)%.(.-)%.DUAL%.(.-)%.([%w%.]+)%-(.-)%.%w+$",
+        fields = { "title", "year", "resolution", "source", "audio", "codec", "group" }
     },
-
-    -- [Group] Title - Special ## [Hash]
     {
-        name = "anime_special_numbered",
+        name = "title_year_proper_resolution_remux_dual_audio_group",
+        confidence = 95,
+        -- Matches: Title.Year.PROPER.1080p.Blu-ray.Remux.Codec.DUAL.Audio-Group.mkv
+        regex = "^(.-)%.(%d%d%d%d)%.PROPER%.(%d%d%d%dp)%.(.-)%.Remux%.(.-)%.DUAL%.(.-)%-(.-)%.%w+$",
+        fields = { "title", "year", "resolution", "source", "codec", "audio", "group" }
+    },
+    {
+        name = "title_year_repack_resolution_source_dual_codec_group",
+        confidence = 95,
+        -- Matches: Title.Year.REPACK.1080p.Source.DUAL.Audio.Codec-Group.mkv
+        regex = "^(.-)%.(%d%d%d%d)%.REPACK%.(%d%d%d%dp)%.(.-)%.DUAL%.(.-)%.([%w%.]+)%-(.-)%.%w+$",
+        fields = { "title", "year", "resolution", "source", "audio", "codec", "group" }
+    },
+    {
+        name = "title_year_uhd_bluray_resolution_audio_codec_remux_group",
+        confidence = 95,
+        -- Matches: Title.Year.UHD.BluRay.2160p.Audio.Codec.HYBRID.REMUX-Group.mkv
+        regex = "^(.-)%.(%d%d%d%d)%.UHD%.BluRay%.(%d%d%d%dp)%.(.-)%.(.-)%.HYBRID%.REMUX%-(.-)%.%w+$",
+        fields = { "title", "year", "resolution", "audio", "codec", "group" }
+    },
+    {
+    name = "anime_subgroup_season_dash_episode",
+    confidence = 96,
+    -- Captures Group, Title, Season Number, and Episode
+    regex = "^%[(.-)%]%s*(.-)%s+(%d+)[stndrdth]+%s+[Ss]eason%s+[%-–—]%s+(%d%d?%d?)[%s%._%-]*%[",
+    fields = { "group", "title", "season", "episode" }
+    },
+    {
+        name = "anime_subgroup_dash_episode",
+        confidence = 95,
+        regex = "^%[(.-)%]%s*(.*)%s+[%-–—]%s+(%d%d?%d?)[%s%._%-]*%[",
+        fields = { "group", "title", "episode" }
+    },
+    {
+        name = "title_dash_episode_bracket_meta",
+        confidence = 95,
+        regex = "^(.-)%s*[%-%–—]%s*(%d+)%s*%[(.-)%]%.%w+$",
+        fields = { "title", "episode", "metadata" }
+    },
+    {
+        name = "dots_sxx_scene",
+        confidence = 95,
+        regex = "^([%w%.]+)%.[Ss](%d%d)%.(.-)%-([%w]+)%.%w+$",
+        fields = { "title", "season", "metadata", "group" }
+    },
+    {
+        name = "scene_dots_title_year",
+        confidence = 95,
+        regex = "^([%w%.%-]+)%.(%d%d%d%d)%.(%d%d%d%dp)",
+        fields = { "title", "year", "resolution" }
+    },
+    {
+        name = "subgroup_title_episode_resolution_hash",
+        confidence = 95,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d%d?%d?)%s*%(%d+p%)%s*%[?([%x]+)%]?%.%w+$",
+        fields = { "group", "title", "episode", "hash" }
+    },
+    {
+        name = "subgroup_title_episode_lang_multi_bracket",
         confidence = 94,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s*[Ss]pecial%s+(%d+)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "absolute", "hash" },
-        is_special = true
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d%d?%d?)%s*%((%u%u)%)%s*%[(.-)%]%[(.-)%]%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "episode", "language", "metadata1", "metadata2", "hash" }
     },
-
-    -- [Group] Title - NCOP/NCED ## [Hash] (Opening/Ending)
     {
-        name = "anime_ncop_nced",
+        name = "subgroup_title_year_remux",
+        confidence = 94,
+        regex = "^%[(.-)%]%s*(.-)%s*%(%d%d%d%d%)%s*%[(.-)%]%s*%[([%x]+)%]",
+        fields = { "group", "title", "source", "hash" }
+    },
+    {
+        name = "complex_title_with_metadata_parens",
+        confidence = 94,
+        regex = "^(.-)%s*[%-%–—]%s*%((.-)%)%s*%[([%x]+)%]-(.-)%.%w+$",
+        fields = { "title", "metadata", "hash", "suffix" }
+    },
+    {
+        name = "subgroup_double_episode",
+        confidence = 94,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d+)%s*&%s*(%d+)%s*%[",
+        fields = { "group", "title", "episode", "episode2" }
+    },
+    {
+        name = "subgroup_title_nc_episode",
+        confidence = 94,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*NCED?%s*(%d*)%s*%[",
+        fields = { "group", "title", "special_num" }
+    },
+    {
+        name = "title_dash_episode_group_suffix",
         confidence = 93,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s*([NnCcOoPpEeDd]+)%s*(%d*)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "special_type", "absolute", "hash" },
-        is_special = true
+        regex = "^(.-)%s*[%-%–—]%s*(%d+)%s*%[(.-)%]%.%w+$",
+        fields = { "title", "episode", "group" }
     },
-
-    -- =========================================================================
-    -- TIER 3: COMPLEX TITLES & DOT-SEPARATED
-    -- =========================================================================
-
-    -- [Group].Title.Year.Metadata.[Hash] (Magical Mirai / LOU-Doremi style)
     {
-        name = "anime_dot_group_metadata_hash",
-        confidence = 95,
-        regex = "^%[(.-)%]%.(.-)%.?%s*%[[%d%a].*%[([0-9A-Fa-f]{8})%]",
+        name = "title_dash_episode_metadata_tags",
+        confidence = 93,
+        regex = "^(.-)%s*[%-%–—]%s*(%d+)%s*(%[.-%])",
+        fields = { "title", "episode", "metadata" }
+    },
+    {
+        name = "subgroup_title_resolution_hash_no_episode",
+        confidence = 93,
+        regex = "^%[(.-)%]%s*(.-)%s*%(%d+p%)%s*%[?([%x]+)%]?%.%w+$",
         fields = { "group", "title", "hash" }
     },
-
-    -- [Group].Title.##.[Hash] (Fully dotted episodic)
     {
-        name = "anime_dot_group_episode",
-        confidence = 94,
-        regex = "^%[(.-)%]%.(.-)%.(%d+)%..*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "absolute", "hash" }
-    },
-
-    -- Title - S3 - Subtitle (Jujutsu Kaisen style)
-    {
-        name = "scene_season_subtitle_metadata",
-        confidence = 94,
-        regex = "^(.-)%s+[%-–—]%s+[Ss](%d+)%s+[%-–—]%s+(.-)%s*.*%[(.-)%].*",
-        fields = { "title", "season", "subtitle", "metadata" }
-    },
-
-    -- Title · Episode [Hash] (Ayakashi style with middle dot)
-    {
-        name = "anime_dot_episode_hash",
-        confidence = 92,
-        regex = "^(.-)%s*·%s*(%d+)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "title", "absolute", "hash" }
-    },
-
-    -- Title #Episode [Hash] (Hash prefix style)
-    {
-        name = "anime_hash_episode_prefix",
-        confidence = 91,
-        regex = "^(.-)%s*#(%d+)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "title", "absolute", "hash" }
-    },
-
-    -- [Group] Title (Year) [Hash] (Year in parenthesis)
-    {
-        name = "anime_group_year_hash",
+        name = "web_dl_tag_sxxexx",
         confidence = 93,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+%((%d%d%d%d)%)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "year", "hash" }
+        regex = "^(.-)[%s%._%-]+WEB%-DL[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
     },
-
-    -- =========================================================================
-    -- TIER 4: SCENE / WEB-DL / NAKED TITLES
-    -- =========================================================================
-
-    -- Title (Year) (Metadata - Group) (Lost in Starlight style)
     {
-        name = "scene_movie_parenthesis_year",
-        confidence = 90,
-        regex = "^(.-)%s+%(%d%d%d%d%)%s*%(.*[%s%-](.-)%)",
-        fields = { "title", "group" },
-        is_movie = true
+        name = "bluray_tag_sxxexx",
+        confidence = 93,
+        regex = "^(.-)[%s%._%-]+BluRay[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
     },
-
-    -- Title.Year.Quality.Source.Audio.Codec-Group (Ramayana style)
     {
-        name = "scene_full_dotted",
-        confidence = 88,
-        regex = "^([%a%d%.%-]+)%.(%d%d%d%d)%.%d+p%.(.-)%-([%a%d%.]+)$",
-        fields = { "title", "year", "metadata", "group" }
-    },
-
-    -- Title Year Quality-Group (Space separated scene)
-    {
-        name = "scene_space_separated",
-        confidence = 87,
-        regex = "^(.-)%s+(%d%d%d%d)%s+%d+p%s+(.-)%-([%a%d]+)$",
-        fields = { "title", "year", "metadata", "group" }
-    },
-
-    -- Title [Hash] (White Snake style)
-    {
-        name = "naked_title_hash",
-        confidence = 85,
-        regex = "^(.-)%s*%[([0-9A-Fa-f]{8})%]",
-        fields = { "title", "hash" }
-    },
-
-    -- Title [UHD][Year]
-    {
-        name = "naked_title_quality_year",
-        confidence = 82,
-        regex = "^(.-)%s*%[(.-)%]%[(%d%d%d%d)%]",
-        fields = { "title", "metadata", "year" }
-    },
-
-    -- Title [1080p] [Hash] (Takopii style)
-    {
-        name = "naked_title_quality_hash",
-        confidence = 80,
-        regex = "^(.-)%s*%[%d+p%]%s*%[([0-9A-Fa-f]{8})%]",
-        fields = { "title", "hash" }
-    },
-
-    -- Title [Multiple][Metadata][Blocks] [Hash]
-    {
-        name = "naked_multi_metadata_hash",
-        confidence = 78,
-        regex = "^(.-)%s*%[.-%]%[.-%].*%[([0-9A-Fa-f]{8})%]",
-        fields = { "title", "hash" }
-    },
-
-    -- =========================================================================
-    -- TIER 5: MULTI-EPISODE & RANGES
-    -- =========================================================================
-
-    -- [Group] Title - S01E01-E02 (Multi-episode)
-    {
-        name = "anime_group_multi_episode",
-        confidence = 97,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[Ss](%d+)[Ee](%d+)[%-~][Ee](%d+)%s*.*$",
-        fields = { "group", "title", "season", "episode", "episode_end" }
-    },
-
-    -- [Group] Title - 01+02 [Hash] (Plus separator)
-    {
-        name = "anime_group_episode_plus",
-        confidence = 96,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s+(%d+)%+(%d+)%s*.*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "absolute", "absolute_end", "hash" }
-    },
-
-    -- =========================================================================
-    -- TIER 6: DUAL AUDIO & LANGUAGE VARIANTS
-    -- =========================================================================
-
-    -- [Group] Title - ## [DUAL-AUDIO][Hash]
-    {
-        name = "anime_dual_audio",
-        confidence = 95,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s+(%d+)%s*.*%[[DdUuAaLl%-]+%]%s*%[([0-9A-Fa-f]{8})%]",
-        fields = { "group", "title", "absolute", "hash" }
-    },
-
-    -- [Group] Title - ## [SUB] [Hash]
-    {
-        name = "anime_subtitle_marker",
+        name = "subgroup_title_ova_multi_bracket",
         confidence = 92,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s+(%d+)%s*%[[SsUuBbDdUu]+%]%s*.*%[([0-9A-Fa-f]{8})%]",
+        regex = "^%[(.-)%]%s*(.-[Oo][Vv][Aa].-)%s*%[(.-)%]%s*%[([%x]+)%]%.%w+$",
+        fields = { "group", "title", "extra", "hash" }
+    },
+    {
+        name = "ova_special_tag",
+        confidence = 92,
+        regex = "^(.-)[%s%._%-]+(?:special|ova|oav|oad)[%s%._%-]*(%d?%d?)",
+        fields = { "title", "special_num" }
+    },
+    {
+        name = "subgroup_long_title_movie",
+        confidence = 92,
+        regex = "^%[(.-)%]%s*(.-)%s*%[(%d+p.-)%]%.%w+$",
+        fields = { "group", "title", "metadata" }
+    },
+    {
+        name = "subgroup_title_source_bracket",
+        confidence = 92,
+        regex = "^%[(.-)%]%s*(.-)%s*%(%w+%)%s*%[([%x]+)%]",
+        fields = { "group", "title", "hash" }
+    },
+    {
+        name = "paren_group_absolute_hash",
+        confidence = 92,
+        regex = "^%((.-)%)%s*(.-)%s+(%d+)%s*%[([%x]+)%]%.%w+$",
         fields = { "group", "title", "absolute", "hash" }
     },
-
-    -- =========================================================================
-    -- TIER 7: FALLBACKS (Aggressive)
-    -- =========================================================================
-
-    -- Title (Quality Codec) (Nomo no Kuni style)
     {
-        name = "fallback_scene_no_group",
-        confidence = 40,
-        regex = "^(.-)%s+%(%d+p%s+.*%)",
-        fields = { "title" }
+        name = "hdtv_tag_sxxexx",
+        confidence = 92,
+        regex = "^(.-)[%s%._%-]+HDTV[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
     },
-
-    -- [Group] Title - 01
     {
-        name = "fallback_group_title_num",
-        confidence = 60,
-        regex = "^%[(.-)%][%s%.]*(.-)%s+[%-–—]%s+(%d+)",
-        fields = { "group", "title", "absolute" }
+        name = "proper_repack_tag",
+        confidence = 92,
+        regex = "^(.-)[%s%._%-]+(?:PROPER|REPACK)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
     },
-
-    -- Title - ##
     {
-        name = "fallback_simple_number",
-        confidence = 35,
-        regex = "^(.-)%s+[%-–—]%s+(%d+)",
+    name = "anime_subgroup_roman_season",
+    confidence = 92,
+    -- Matches: [Group] Title II - 12
+    regex = "^%[(.-)%]%s*(.-)%s+([IVX][IVX]+)%s*[%-–—]%s*(%d+)",
+    fields = { "group", "title", "season_roman", "episode" }
+    },
+    {
+        name = "bracketed_sxxexx_or_range",
+        confidence = 91,
+        regex = "^(.-)[%s%._%-]+%[S(%d+)[Ee](%d+)(?:[-E](%d+))?%]",
+        fields = { "title", "season", "episode", "episode2" }
+    },
+    {
+        name = "title_year_metadata_parens",
+        confidence = 91,
+        regex = "^(.-)%s*%(%d%d%d%d%)%s*%(%d+p.-%)",
+        fields = { "title", "metadata" }
+    },
+    {
+        name = "internal_release_tag",
+        confidence = 91,
+        regex = "^(.-)[%s%._%-]+iNTERNAL[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "uncut_extended_tag",
+        confidence = 91,
+        regex = "^(.-)[%s%._%-]+(?:UNCUT|EXTENDED)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "sxxexx_title",
+        confidence = 90,
+        -- Matches: Title.S01E07.metadata or Title S01E07 metadata
+        -- Stops at first S##E## to avoid Roman numerals in title
+        regex = "^(.-%w)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "dots_title_sxxexx_metadata",
+        confidence = 91,
+        -- Higher priority for dot-separated titles with standard metadata
+        -- Matches: Title.With.Dots.S01E07.1080p.WEB-DL...
+        regex = "^([%w%.]+)%.[Ss](%d+)[Ee](%d+)%.%d+p",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "turkish_tracker_bolum",
+        confidence = 90,
+        regex = "^(.-)[%s%._%-]+(%d{1,4})[%s%._%-]+(?:BLM|B[oö]l[uü]m)",
         fields = { "title", "absolute" }
     },
-
-    -- [Group] Title (Minimal group+title)
     {
-        name = "fallback_group_title_only",
-        confidence = 30,
-        regex = "^%[(.-)%][%s%.]*(.+)$",
+        name = "spanish_temporada_cap",
+        confidence = 90,
+        regex = "^(.-)%[?(.+)%]?[%s%._%-]+Temporada[%s%._%-]+(%d+)[%s%._%-]+Cap",
+        fields = { "title", "tracker", "season" }
+    },
+    {
+        name = "limited_release_tag",
+        confidence = 90,
+        regex = "^(.-)[%s%._%-]+LiMiTED[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "directors_cut_tag",
+        confidence = 90,
+        regex = "^(.-)[%s%._%-]+(?:Directors?[%s%._%-]*Cut|DC)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+    name = "anime_subgroup_roman_season_dash_episode",
+    confidence = 90, -- Lowered because it's prone to False Positives
+    -- Requires at least two Roman characters (II, III, IV) to trigger
+    regex = "^%[(.-)%]%s*(.-)%s+([IVX][IVX]+)%s*[%-%–—]%s*(%d%d?)",
+    fields = { "group", "title", "season_roman", "episode" }
+    },
+    {
+        name = "numeric_prefix_103style",
+        confidence = 89,
+        regex = "^(.-)[%s%._%-]+([1-9])([0-9][0-9])$",
+        fields = { "title", "hundreds", "rest" }
+    },
+    {
+        name = "retail_tag",
+        confidence = 89,
+        regex = "^(.-)[%s%._%-]+RETAIL[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "subbed_dubbed_tag",
+        confidence = 89,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d+)%s*%((?:SUBBED|DUBBED)%)",
+        fields = { "group", "title", "episode" }
+    },
+    {
+        name = "sxxexx_bracketed",
+        confidence = 88,
+        regex = "^(.-)[%s%._%-]+%[S(%d+)[Ee](%d+)%]",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "season_pack_multi_season",
+        confidence = 88,
+        regex = "^(.-)[%s%._%-]+(?:Complete Series|Complete Collection)?[%s%._%-]+(?:S|Season)[%s%._%-]*(%d+)[%s%._%-]+(?:S|Season)[%s%._%-]*(%d+)",
+        fields = { "title", "season", "season2" }
+    },
+    {
+        name = "festival_screener_tag",
+        confidence = 88,
+        regex = "^(.-)[%s%._%-]+(?:FESTIVAL|SCR|SCREENER)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "dual_audio_tag",
+        confidence = 88,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d+)%s*%[?Dual[%s%-]?Audio%]?",
+        fields = { "group", "title", "episode" }
+    },
+    {
+        name = "trailing_hash_and_group",
+        confidence = 87,
+        regex = "^(.-)[%s%._%-]+%[(.-)%][%s%._%-]*%[?([%x]+)%]$",
+        fields = { "title", "group", "hash" }
+    },
+    {
+        name = "batch_tag_pattern",
+        confidence = 87,
+        regex = "^%[(.-)%]%s*(.-)%s*[%-%–—]%s*BATCH[%s%._%-]*%[",
         fields = { "group", "title" }
     },
-
-    -- Title only (Last resort)
     {
-        name = "fallback_title_only",
-        confidence = 20,
-        regex = "^(.+)$",
+        name = "complete_series_tag",
+        confidence = 87,
+        regex = "^(.-)[%s%._%-]+Complete[%s%._%-]+(?:Series|Collection|Season)",
+        fields = { "title" }
+    },
+    {
+        name = "s2016_style_four_digit_season",
+        confidence = 86,
+        regex = "^(.-)[%s%._%-]+S(%d%d%d%d)[%s%._%-]*E(%d%d?)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "theatrical_cut_tag",
+        confidence = 86,
+        regex = "^(.-)[%s%._%-]+Theatrical[%s%._%-]+Cut[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "remastered_tag",
+        confidence = 86,
+        regex = "^(.-)[%s%._%-]+REMASTERED[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "dash_two_digit_episode",
+        confidence = 85,
+        regex = "^(.-)%s*[%-%–—]%s*(%d%d)$",
+        fields = { "title", "episode" }
+    },
+    {
+        name = "airdate_compact_yyyymmdd",
+        confidence = 85,
+        regex = "^(.-)[%s%._%-]+(%d%d%d%d)(%d%d)(%d%d)$",
+        fields = { "title", "airyear", "airmonth", "airday" }
+    },
+    {
+        name = "remux_long_tail_group",
+        confidence = 85,
+        regex = "^(.-)%s+(%d%d%d%d)%s+.*%s*[%-%–—]%s*(.-)%.%w+$",
+        fields = { "title", "year", "group" }
+    },
+    {
+        name = "criterion_collection",
+        confidence = 85,
+        regex = "^(.-)[%s%._%-]+Criterion[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "4k_uhd_tag",
+        confidence = 85,
+        regex = "^(.-)[%s%._%-]+(?:4K|UHD)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "episode_tag",
+        confidence = 84,
+        regex = "^(.-)%s+[Ee]pisode[%s%._%-]+(%d+)",
+        fields = { "title", "absolute" }
+    },
+    {
+        name = "absolute_in_brackets",
+        confidence = 84,
+        regex = "^(.-)[%s%._%-]+%[(%d%d%d)(%.?%d?)%]",
+        fields = { "title", "absolute", "absolute_frac" }
+    },
+    {
+        name = "imax_tag",
+        confidence = 84,
+        regex = "^(.-)[%s%._%-]+IMAX[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "hdr_dolby_vision_tag",
+        confidence = 84,
+        regex = "^(.-)[%s%._%-]+(?:HDR|DV|DoVi)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "chinese_then_english_bracketed",
+        confidence = 83,
+        regex = "^([%z\1-\127\194-\244][^\n]-)[%s%._%-]+(.+?)[%s%._%-]+%[S(%d+)[Ee](%d+)%]",
+        fields = { "cjk_title", "title", "season", "episode" }
+    },
+    {
+        name = "atmos_dtsx_audio_tag",
+        confidence = 83,
+        regex = "^(.-)[%s%._%-]+(?:Atmos|DTS[%:%.]?X)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "hfr_high_frame_rate",
+        confidence = 83,
+        regex = "^(.-)[%s%._%-]+(?:HFR|60fps|48fps)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "trailing_3digit_absolute",
+        confidence = 82,
+        regex = "^(.-)[%s%._%-]+([0-9][0-9][0-9]%.?%d?)$",
+        fields = { "title", "absolute" }
+    },
+    {
+        name = "episode_tag_with_hash",
+        confidence = 82,
+        regex = "^(.-)[%s%._%-]+Episode[%s%._%-]+(%d+).+%[([%x]+)%]$",
+        fields = { "title", "absolute", "hash" }
+    },
+    {
+        name = "hybrid_remux_tag",
+        confidence = 82,
+        regex = "^(.-)[%s%._%-]+HYBRID[%s%._%-]+REMUX[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "open_matte_tag",
+        confidence = 82,
+        regex = "^(.-)[%s%._%-]+Open[%s%._%-]?Matte[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "multi_sxxexx",
+        confidence = 80,
+        regex = "^(.-)[%s%._%-]+[Ss](%d+)[Ee](%d+)[Ee%-](%d+)",
+        fields = { "title", "season", "episode", "episode2" }
+    },
+    {
+        name = "commentary_track_tag",
+        confidence = 80,
+        regex = "^(.-)[%s%._%-]+Commentary[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "anniversary_edition",
+        confidence = 80,
+        regex = "^(.-)[%s%._%-]+(%d+)th[%s%._%-]+Anniversary[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "anniversary", "year" }
+    },
+    {
+        name = "absolute_batch_range",
+        confidence = 78,
+        regex = "^(.-)[%s%._%-]+([0-9][0-9][0-9]%.?%d?)[%s%._%-]*[%-%~][%s%._%-]*([0-9][0-9][0-9]%.?%d?)",
+        fields = { "title", "absolute", "absolute2" }
+    },
+    {
+        name = "restored_tag",
+        confidence = 78,
+        regex = "^(.-)[%s%._%-]+RESTORED[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "ultimate_edition_tag",
+        confidence = 78,
+        regex = "^(.-)[%s%._%-]+Ultimate[%s%._%-]+Edition[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "airdate_iso",
+        confidence = 76,
+        regex = "^(.-)[%s%._%-]+%(?([12]%d%d%d)[%._%-]?(0[1-9]|1[0-2])[%._%-]?([0-2]%d|3[01])%)?",
+        fields = { "title", "airyear", "airmonth", "airday" }
+    },
+    {
+        name = "collectors_edition",
+        confidence = 76,
+        regex = "^(.-)[%s%._%-]+Collectors?[%s%._%-]+Edition[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "special_edition_tag",
+        confidence = 76,
+        regex = "^(.-)[%s%._%-]+Special[%s%._%-]+Edition[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "cjk_then_english_sxxexx",
+        confidence = 74,
+        regex = "^([%z\1-\127\194-\244][^\n]-)[%s%._%-]+(.+?)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "cjk_title", "title", "season", "episode" }
+    },
+    {
+        name = "deluxe_edition_tag",
+        confidence = 74,
+        regex = "^(.-)[%s%._%-]+Deluxe[%s%._%-]+Edition[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "limited_steelbook",
+        confidence = 74,
+        regex = "^(.-)[%s%._%-]+(?:Limited|Steelbook)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "subgroup_absolute_hash",
+        confidence = 72,
+        regex = "^%[(.-)%]%s*(.-)%s+([0-9][0-9][0-9]%.?%d?)%s*%[?%w+%]?%s*%[?([%x]+)%]?$",
+        fields = { "group", "title", "absolute", "hash" }
+    },
+    {
+        name = "fansub_multiple_groups",
+        confidence = 72,
+        regex = "^%[(.-)%]%[(.-)%]%s*(.-)%s*[%-%–—]%s*(%d+)",
+        fields = { "group", "group2", "title", "episode" }
+    },
+    {
+        name = "preview_pilot_tag",
+        confidence = 72,
+        regex = "^(.-)[%s%._%-]+(?:PREVIEW|PILOT)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "season_only",
+        confidence = 70,
+        regex = "^(.-)[%s%._%-]+[Ss]eason[%s%._%-]*(%d+)",
+        fields = { "title", "season" }
+    },
+    {
+        name = "trilogy_box_set",
+        confidence = 70,
+        regex = "^(.-)[%s%._%-]+(?:Trilogy|Collection|Box[%s%._%-]*Set)",
+        fields = { "title" }
+    },
+    {
+        name = "uncensored_unrated_tag",
+        confidence = 70,
+        regex = "^(.-)[%s%._%-]+(?:UNCENSORED|UNRATED)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "part_number_tag",
+        confidence = 68,
+        regex = "^(.-)[%s%._%-]+Part[%s%._%-]*(%d+)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "part", "year" }
+    },
+    {
+        name = "disc_number_tag",
+        confidence = 68,
+        regex = "^(.-)[%s%._%-]+(?:CD|DISC?)[%s%._%-]*(%d+)",
+        fields = { "title", "disc" }
+    },
+    {
+        name = "bonus_features_tag",
+        confidence = 66,
+        regex = "^(.-)[%s%._%-]+(?:Bonus|Extras|Features)[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "workprint_tag",
+        confidence = 66,
+        regex = "^(.-)[%s%._%-]+WORKPRINT[%s%._%-]+(%d%d%d%d)",
+        fields = { "title", "year" }
+    },
+    {
+        name = "french_vff_vfq_tag",
+        confidence = 65,
+        regex = "^(.-)[%s%._%-]+(?:VFF|VFQ|FRENCH)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "german_dubbed_tag",
+        confidence = 65,
+        regex = "^(.-)[%s%._%-]+(?:GERMAN|DL)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "nordic_subs_tag",
+        confidence = 65,
+        regex = "^(.-)[%s%._%-]+NORDIC[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "multi_lang_tag",
+        confidence = 65,
+        regex = "^(.-)[%s%._%-]+MULTi[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "minimalist_media_tag",
+        confidence = 60,
+        regex = "^(.-)%s+(DVD|BD|BR|VOD|VHS)%.%w+$",
+        fields = { "title", "source" }
+    },
+    {
+        name = "sample_tag",
+        confidence = 60,
+        regex = "^(.-)%-[Ss]ample%.%w+$",
+        fields = { "title" }
+    },
+    {
+        name = "proof_tag",
+        confidence = 60,
+        regex = "^(.-)%-[Pp]roof%.%w+$",
+        fields = { "title" }
+    },
+    {
+        name = "rarbg_tag",
+        confidence = 58,
+        regex = "^(.-)[%s%._%-]+RARBG%.%w+$",
+        fields = { "title" }
+    },
+    {
+        name = "yify_tag",
+        confidence = 58,
+        regex = "^(.-)[%s%._%-]+(?:YIFY|YTS)%.%w+$",
+        fields = { "title" }
+    },
+    {
+        name = "eztv_tag",
+        confidence = 58,
+        regex = "^(.-)[%s%._%-]+EZTV%.%w+$",
+        fields = { "title" }
+    },
+    {
+        name = "xvid_divx_codec",
+        confidence = 56,
+        regex = "^(.-)[%s%._%-]+(?:XviD|DivX)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "x264_x265_codec",
+        confidence = 56,
+        regex = "^(.-)[%s%._%-]+[xXhH]26[45][%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "hevc_h265_tag",
+        confidence = 56,
+        regex = "^(.-)[%s%._%-]+(?:HEVC|H%.?265)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "av1_codec_tag",
+        confidence = 56,
+        regex = "^(.-)[%s%._%-]+AV1[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "ac3_audio_tag",
+        confidence = 54,
+        regex = "^(.-)[%s%._%-]+AC3[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "aac_audio_tag",
+        confidence = 54,
+        regex = "^(.-)[%s%._%-]+AAC[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "dts_audio_tag",
+        confidence = 54,
+        regex = "^(.-)[%s%._%-]+DTS[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "truehd_audio_tag",
+        confidence = 54,
+        regex = "^(.-)[%s%._%-]+TrueHD[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "flac_audio_tag",
+        confidence = 54,
+        regex = "^(.-)[%s%._%-]+FLAC[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "ddp_audio_tag",
+        confidence = 54,
+        regex = "^(.-)[%s%._%-]+DD[P%+][%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "nf_netflix_tag",
+        confidence = 52,
+        regex = "^(.-)[%s%._%-]+NF[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "amzn_amazon_tag",
+        confidence = 52,
+        regex = "^(.-)[%s%._%-]+AMZN[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "dsnp_disney_tag",
+        confidence = 52,
+        regex = "^(.-)[%s%._%-]+(?:DSNP|DPlus)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "hmax_hbo_tag",
+        confidence = 52,
+        regex = "^(.-)[%s%._%-]+(?:HMAX|HBO)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "atvp_appletv_tag",
+        confidence = 52,
+        regex = "^(.-)[%s%._%-]+(?:ATVP|ATV)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "pcok_peacock_tag",
+        confidence = 52,
+        regex = "^(.-)[%s%._%-]+PCOK[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "pmtp_paramount_tag",
+        confidence = 52,
+        regex = "^(.-)[%s%._%-]+(?:PMTP|PARA)[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "loose_trailing_number",
+        confidence = 50,
+        regex = "^(.-)%s+(%d+)$",
+        fields = { "title", "episode" }
+    },
+    {
+        name = "season_finale_tag",
+        confidence = 48,
+        regex = "^(.-)[%s%._%-]+(?:Season[%s%._%-]*)?Finale[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "series_premiere_tag",
+        confidence = 48,
+        regex = "^(.-)[%s%._%-]+(?:Series[%s%._%-]*)?Premiere[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "mid_season_finale_tag",
+        confidence = 48,
+        regex = "^(.-)[%s%._%-]+Mid[%s%._%-]*Season[%s%._%-]*Finale[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "christmas_special_tag",
+        confidence = 46,
+        regex = "^(.-)[%s%._%-]+Christmas[%s%._%-]+Special[%s%._%-]*(%d*)",
+        fields = { "title", "special_num" }
+    },
+    {
+        name = "halloween_special_tag",
+        confidence = 46,
+        regex = "^(.-)[%s%._%-]+Halloween[%s%._%-]+Special[%s%._%-]*(%d*)",
+        fields = { "title", "special_num" }
+    },
+    {
+        name = "behind_scenes_tag",
+        confidence = 44,
+        regex = "^(.-)[%s%._%-]+Behind[%s%._%-]+(?:the[%s%._%-]+)?Scenes",
+        fields = { "title" }
+    },
+    {
+        name = "making_of_tag",
+        confidence = 44,
+        regex = "^(.-)[%s%._%-]+Making[%s%._%-]+Of",
+        fields = { "title" }
+    },
+    {
+        name = "deleted_scenes_tag",
+        confidence = 44,
+        regex = "^(.-)[%s%._%-]+Deleted[%s%._%-]+Scenes",
+        fields = { "title" }
+    },
+    {
+        name = "gag_reel_tag",
+        confidence = 44,
+        regex = "^(.-)[%s%._%-]+(?:Gag[%s%._%-]+Reel|Bloopers)",
+        fields = { "title" }
+    },
+    {
+        name = "recap_tag",
+        confidence = 42,
+        regex = "^(.-)[%s%._%-]+Recap[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "previously_on_tag",
+        confidence = 42,
+        regex = "^(.-)[%s%._%-]+Previously[%s%._%-]+On[%s%._%-]+[Ss](%d+)[Ee](%d+)",
+        fields = { "title", "season", "episode" }
+    },
+    {
+        name = "loose_title_metadata_tail",
+        confidence = 40,
+        regex = "^([^%[%%(]+)%s*[%(%[]",
         fields = { "title" }
     }
 }
 
--- ==================================================================================
--- LOGIC
--- ==================================================================================
-
-local function parse_sxe(str)
-    if not str then return nil, nil end
-    return str:lower():match("s(%d+)e(%d+)")
-end
-
-function M.run_patterns(filename, logger)
-    -- Pre-clean filename extensions
-    local clean_name = filename:gsub("%.[Mm][Kk][Vv]$", "")
-                               :gsub("%.[Rr][Aa][Rr]$", "")
-                               :gsub("%.[Mm][Pp]4$", "")
-                               :gsub("%.[Aa][Vv][Ii]$", "")
-    -- Handle nested .mkv] edge case
-    clean_name = clean_name:gsub("%.mkv%]", "]")
-
+function M.run_patterns(content, logger)
     for _, p in ipairs(PATTERNS) do
-        local captures = { clean_name:match(p.regex) }
+        local caps = { content:match(p.regex) }
 
-        if #captures > 0 then
+        if #caps > 0 then
+            -- Handle logging
             if logger then
-                logger(string.format("MATCH: %s (Conf: %d)", p.name, p.confidence))
-            end
-
-            local result = {
-                pattern = p.name,
-                confidence = p.confidence,
-                is_special = p.is_special or false,
-                is_movie = p.is_movie or false
-            }
-
-            for i, field in ipairs(p.fields) do
-                local val = captures[i]
-                if val then
-                    if field == "sxe" then
-                        result.season, result.episode = parse_sxe(val)
-                    elseif field == "title" then
-                        result.title = sanitize_title(val)
-                    elseif field == "group" then
-                        result.group = val:gsub("[%[%]]", "")
-                    elseif field == "hash" then
-                        result.hash = val:upper()
-                    else
-                        if field:match("episode") or field:match("season") or field:match("absolute") or field:match("year") then
-                             result[field] = tonumber(val)
-                        else
-                             result[field] = val
-                        end
-                    end
+                if DEBUG_PATTERNS then
+                    logger(string.format("PATTERN MATCHED: %-28s | confidence=%d | captures=[%s]",
+                        p.name, p.confidence, table.concat(caps, ", ")))
                 end
+            else
+                debug_pattern_hit(p.name, p.confidence, caps)
             end
 
-            if result.title and result.title ~= "" then
-                return result
+            -- Process fields
+            local out = { pattern = p.name, confidence = p.confidence }
+            for i, field in ipairs(p.fields) do
+                local value = caps[i]
+                
+                -- Use the cleaner here
+                if field == "title" then
+                    value = sanitize_title(value)
+                end
+                
+                out[field] = value
             end
+            return out
         end
+    end
+
+    -- No match logging
+    if DEBUG_PATTERNS then
+        local msg = "NO PATTERN MATCHED for: " .. content
+        if logger then logger(msg) else print(msg) end
     end
 
     return nil
