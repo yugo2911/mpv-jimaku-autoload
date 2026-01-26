@@ -349,12 +349,17 @@ local function parse_filename(filename)
 
     -- Pattern B: Explicit Episode Tag (e.g., - 01 or Ep 01)
     if not episode then
-        -- Handle titles with multiple dashes like "Gintama - 3-nen Z-gumi - 12"
-        -- We look for the LAST occurrence of " - Number" that isn't inside brackets
-        local t_multi, ep_multi = content:match("^(.-)%s+%-%s+(%d+%.?%d*)%s*")
+        -- Find all occurrences of " - Number" and pick the last one that isn't clearly metadata
+        -- This fixes "Gintama - 3-nen ... - 12"
+        local last_t, last_ep
+        for t, ep in content:gmatch("(.-)%s+%-%s+(%d+%.?%d*)%s*") do
+            -- We keep updating until we hit the end of the meaningful content
+            -- (metadata like (1080p) will be handled later by the title cleanup)
+            last_t, last_ep = t, ep
+        end
         
-        if t_multi and ep_multi then
-            title, episode = t_multi, ep_multi
+        if last_t and last_ep then
+            title, episode = last_t, last_ep
         else
             -- Fallback to standard Ep 01 or Episode 01
             local t, ep = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
