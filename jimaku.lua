@@ -350,8 +350,8 @@ local function parse_filename(filename)
     -- Pattern B: Explicit Episode Tag (e.g., - 01 or Ep 01)
     if not episode then
         -- Handle titles with multiple dashes like "Gintama - 3-nen Z-gumi - 12"
-        -- We look for the LAST occurrence of " - Number"
-        local t_multi, ep_multi = content:match("^(.-)%s+%-%s+(%d+%.?%d*)[^%-]*$")
+        -- We look for the LAST occurrence of " - Number" that isn't inside brackets
+        local t_multi, ep_multi = content:match("^(.-)%s+%-%s+(%d+%.?%d*)%s*")
         
         if t_multi and ep_multi then
             title, episode = t_multi, ep_multi
@@ -367,6 +367,10 @@ local function parse_filename(filename)
     -- Pattern C: Loose Number (e.g., Title 01)
     if not episode then
         local t, ep = content:match("^(.-)%s+(%d+%.?%d*)$")
+        if not t then
+            -- Try to find a number before tags/quality brackets
+            t, ep = content:match("^(.-)%s+(%d+%.?%d*)%s*[%[%(]")
+        end
         if t and ep then
             title, episode = t, ep
         end
@@ -401,13 +405,17 @@ local function parse_filename(filename)
     -- NEW: Detect Loose Season Number (e.g., "Mato Seihei no Slave 2")
     -- Only triggers if the title ends in a number and we don't have a season yet
     if not season then
-        local loose_s = title:match("%s(%d+)$")
-        if loose_s then
-            -- Safety: Only treat as season if title is longer than just the number
-            -- (Prevents "22/7" from losing its "7")
-            if #title > #loose_s + 2 then
-                season = tonumber(loose_s)
-                title = title:gsub("%s%d+$", "")
+        -- Check if it's "Part X" - if so, keep it in the title
+        local is_part = title:match("[Pp]art%s+(%d+)$")
+        if not is_part then
+            local loose_s = title:match("%s(%d+)$")
+            if loose_s then
+                -- Safety: Only treat as season if title is longer than just the number
+                -- (Prevents "22/7" from losing its "7")
+                if #title > #loose_s + 2 then
+                    season = tonumber(loose_s)
+                    title = title:gsub("%s%d+$", "")
+                end
             end
         end
     end
