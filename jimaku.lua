@@ -38,6 +38,11 @@ local LOG_ONLY_ERRORS = false
 -- Jimaku configuration
 local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
 local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
+local JIMAKU_PREFERRED_GROUPS = {"WEBRip", "WEB-DL", "WEB", "Amazon", "AMZN", "Netflix",}   
+local JIMAKU_HIDE_SIGNS_ONLY = false
+local JIMAKU_ITEMS_PER_PAGE = 6
+local JIMAKU_MENU_TIMEOUT = 30  -- Auto-close after seconds
+local JIMAKU_FONT_SIZE = 16
 
 -- Jimaku API key (will be loaded from file)
 local JIMAKU_API_KEY = ""
@@ -71,7 +76,7 @@ local menu_state = {
     browser_page = 1,
     browser_files = nil,  -- Cached file list
     browser_filter = nil, -- Filter text
-    items_per_page = 4,
+    items_per_page = JIMAKU_ITEMS_PER_PAGE,
     
     -- AniList search results (for manual picker)
     search_results = {},
@@ -79,7 +84,7 @@ local menu_state = {
 }
 
 -- Menu configuration
-local MENU_TIMEOUT = 30  -- Auto-close after 30 seconds
+local MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT
 local MENU_MAX_DISPLAY = 10  -- Maximum items to show at once
 
 -------------------------------------------------------------------------------
@@ -92,6 +97,7 @@ local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_left, handle
 local debug_log, search_anilist, load_jimaku_api_key, is_archive_file
 local show_main_menu, show_subtitles_menu, show_search_menu
 local show_info_menu, show_settings_menu, show_cache_menu
+local show_ui_settings_menu, show_filter_settings_menu
 local show_subtitle_browser, fetch_all_episode_files
 local parse_jimaku_filename, download_selected_subtitle_action
 local show_current_match_info_action, reload_subtitles_action
@@ -144,16 +150,16 @@ render_menu_osd = function()
     local ass = mp.get_property_osd("osd-ass-cc/0")
     
     -- Styling
-    local style_header = "{\\b1\\fs24\\c&H00FFFF&}"  -- Bold, yellow
-    local style_selected = "{\\b1\\fs20\\c&H00FF00&}"  -- Bold, green
-    local style_normal = "{\\fs20\\c&HFFFFFF&}"  -- Normal, white
-    local style_disabled = "{\\fs20\\c&H808080&}"  -- Gray
-    local style_footer = "{\\fs18\\c&HCCCCCC&}"  -- Small, light gray
-    local style_dim = "{\\fs16\\c&H888888&}"     -- Dim gray
+    local style_header = string.format("{\\b1\\fs%d\\c&H00FFFF&}", JIMAKU_FONT_SIZE + 4)
+    local style_selected = string.format("{\\b1\\fs%d\\c&H00FF00&}", JIMAKU_FONT_SIZE)
+    local style_normal = string.format("{\\fs%d\\c&HFFFFFF&}", JIMAKU_FONT_SIZE)
+    local style_disabled = string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE)
+    local style_footer = string.format("{\\fs%d\\c&HCCCCCC&}", JIMAKU_FONT_SIZE - 2)
+    local style_dim = string.format("{\\fs%d\\c&H888888&}", JIMAKU_FONT_SIZE - 4)
     
     -- Build menu
     ass = ass .. style_header .. title .. "\\N"
-    ass = ass .. "{\\fs18\\c&H808080&}" .. string.rep("━", 40) .. "\\N"
+    ass = ass .. string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE - 2) .. string.rep("━", 40) .. "\\N"
     
     -- Items
     for i, item in ipairs(items) do
@@ -173,7 +179,7 @@ render_menu_osd = function()
     end
     
     -- Footer
-    ass = ass .. "{\\fs18\\c&H808080&}" .. string.rep("━", 40) .. "\\N"
+    ass = ass .. string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE - 2) .. string.rep("━", 40) .. "\\N"
     ass = ass .. style_footer .. footer .. "\\N"
     
     mp.osd_message(ass, MENU_TIMEOUT)
@@ -740,17 +746,72 @@ show_settings_menu = function()
             else JIMAKU_MAX_SUBS = 1 end
             pop_menu(); show_settings_menu()  -- Refresh
         end},
-        {text = "3. Initial OSD Messages", hint = INITIAL_OSD_MESSAGES and "✓ Enabled" or "✗ Disabled", action = function()
-            INITIAL_OSD_MESSAGES = not INITIAL_OSD_MESSAGES
-            pop_menu(); show_settings_menu()  -- Refresh
-        end},
-        {text = "4. Reload API Key", action = function()
+        {text = "3. UI & Accessibility  →", action = show_ui_settings_menu},
+        {text = "4. Filters & Priority  →", action = show_filter_settings_menu},
+        {text = "5. Reload API Key", action = function()
             load_jimaku_api_key()
             pop_menu()
         end},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("Settings", items)
+end
+
+-- UI Settings Submenu
+show_ui_settings_menu = function()
+    local items = {
+        {text = "1. Items Per Page: " .. JIMAKU_ITEMS_PER_PAGE, action = function()
+            if JIMAKU_ITEMS_PER_PAGE == 4 then JIMAKU_ITEMS_PER_PAGE = 6
+            elseif JIMAKU_ITEMS_PER_PAGE == 6 then JIMAKU_ITEMS_PER_PAGE = 8
+            elseif JIMAKU_ITEMS_PER_PAGE == 8 then JIMAKU_ITEMS_PER_PAGE = 10
+            else JIMAKU_ITEMS_PER_PAGE = 4 end
+            -- Update current menu state if active
+            menu_state.items_per_page = JIMAKU_ITEMS_PER_PAGE
+            pop_menu(); show_ui_settings_menu()
+        end},
+        {text = "2. Menu Timeout: " .. JIMAKU_MENU_TIMEOUT .. "s", action = function()
+            if JIMAKU_MENU_TIMEOUT == 15 then JIMAKU_MENU_TIMEOUT = 30
+            elseif JIMAKU_MENU_TIMEOUT == 30 then JIMAKU_MENU_TIMEOUT = 60
+            elseif JIMAKU_MENU_TIMEOUT == 60 then JIMAKU_MENU_TIMEOUT = 0 -- Indefinite?
+            else JIMAKU_MENU_TIMEOUT = 15 end
+            MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT == 0 and 3600 or JIMAKU_MENU_TIMEOUT
+            pop_menu(); show_ui_settings_menu()
+        end},
+        {text = "3. Initial OSD Messages", hint = INITIAL_OSD_MESSAGES and "✓ Enabled" or "✗ Disabled", action = function()
+            INITIAL_OSD_MESSAGES = not INITIAL_OSD_MESSAGES
+            pop_menu(); show_ui_settings_menu()
+        end},
+        {text = "4. Font Size: " .. JIMAKU_FONT_SIZE, action = function()
+            if JIMAKU_FONT_SIZE == 16 then JIMAKU_FONT_SIZE = 20
+            elseif JIMAKU_FONT_SIZE == 20 then JIMAKU_FONT_SIZE = 24
+            elseif JIMAKU_FONT_SIZE == 24 then JIMAKU_FONT_SIZE = 28
+            elseif JIMAKU_FONT_SIZE == 28 then JIMAKU_FONT_SIZE = 32
+            else JIMAKU_FONT_SIZE = 16 end
+            pop_menu(); show_ui_settings_menu()
+        end},
+        {text = "0. Back to Settings", action = pop_menu},
+    }
+    push_menu("UI Settings", items)
+end
+
+-- Filter Settings Submenu
+show_filter_settings_menu = function()
+    local signs_status = JIMAKU_HIDE_SIGNS_ONLY and "✓ Hidden" or "✗ Shown"
+    local groups_str = table.concat(JIMAKU_PREFERRED_GROUPS, ", ")
+    
+    local items = {
+        {text = "1. Hide Signs Only Subs", hint = signs_status, action = function()
+            JIMAKU_HIDE_SIGNS_ONLY = not JIMAKU_HIDE_SIGNS_ONLY
+            pop_menu(); show_filter_settings_menu()
+        end},
+        {text = "2. Preferred Groups", hint = groups_str, action = function()
+            mp.osd_message("Enter groups (comma separated) in console", 3)
+            mp.commandv("script-message-to", "console", "type", "script-message jimaku-set-groups ")
+            pop_menu()
+        end},
+        {text = "0. Back to Settings", action = pop_menu},
+    }
+    push_menu("Filter Settings", items)
 end
 
 -- Cache Submenu
@@ -1830,6 +1891,24 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             local match_type = ""
             local is_match = false
             local confidence = "low"
+            local priority_score = 0
+            
+            -- Filter out "Signs Only" if enabled
+            if JIMAKU_HIDE_SIGNS_ONLY then
+                local lower_name = file.name:lower()
+                if lower_name:match("signs") or lower_name:match("songs") or file.size < 5000 then
+                    -- Skip if it's very likely just signs (usually < 5KB)
+                    goto next_file
+                end
+            end
+
+            -- Calculate priority score based on preferred groups
+            for _, pref_group in ipairs(JIMAKU_PREFERRED_GROUPS) do
+                if file.name:lower():match(pref_group:lower()) then
+                    priority_score = 10 -- High boost for preferred groups
+                    break
+                end
+            end
             
             -- Convert to number if it's a string
             local ep_num = tonumber(jimaku_episode) or 0
@@ -1943,12 +2022,14 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                 table.insert(matches, {
                     file = file,
                     confidence = confidence,
-                    match_type = match_type
+                    match_type = match_type,
+                    priority_score = priority_score
                 })
-                debug_log(string.format("  ✓ MATCH [%s | %s]: %s", 
-                    match_type, confidence, file.name:sub(1, 80)))
+                debug_log(string.format("  ✓ MATCH [%s | %s | P=%d]: %s", 
+                    match_type, confidence, priority_score, file.name:sub(1, 80)))
             end
         end
+        ::next_file::
     end
     
     -- Sort matches by confidence (high > medium-high > medium > low-medium > low)
@@ -1961,7 +2042,9 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     }
     
     table.sort(matches, function(a, b)
-        return (confidence_order[a.confidence] or 0) > (confidence_order[b.confidence] or 0)
+        local a_score = (confidence_order[a.confidence] or 0) * 100 + a.priority_score
+        local b_score = (confidence_order[b.confidence] or 0) * 100 + b.priority_score
+        return a_score > b_score
     end)
     
     -- If no matches found, show what we parsed for debugging
@@ -2716,6 +2799,24 @@ if not STANDALONE_MODE then
     -- Script message for browser filtering
     mp.register_script_message("jimaku-browser-filter", function(text)
         apply_browser_filter(text ~= "" and text or nil)
+    end)
+    
+    -- Script message for preferred groups
+    mp.register_script_message("jimaku-set-groups", function(text)
+        if not text or text == "" then return end
+        local groups = {}
+        for group in string.gmatch(text, "([^,]+)") do
+            -- Trim whitespace
+            group = group:gsub("^%s*(.-)%s*$", "%1")
+            if group ~= "" then
+                table.insert(groups, group)
+            end
+        end
+        if #groups > 0 then
+            JIMAKU_PREFERRED_GROUPS = groups
+            debug_log("Updated preferred groups: " .. table.concat(JIMAKU_PREFERRED_GROUPS, ", "))
+            mp.osd_message("Preferred Groups Updated", 3)
+        end
     end)
     
     -- Auto-download subtitles on file load if enabled
