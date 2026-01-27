@@ -71,7 +71,7 @@ local menu_state = {
     browser_page = 1,
     browser_files = nil,  -- Cached file list
     browser_filter = nil, -- Filter text
-    items_per_page = 8,
+    items_per_page = 7,   -- 1-7 for items, 8 Prev, 9 Next, 0 Back
     
     -- AniList search results (for manual picker)
     search_results = {},
@@ -457,7 +457,7 @@ show_main_menu = function()
         {text = "5. Cache          →", action = show_cache_menu},
     }
     
-    push_menu("Jimaku Subtitle Menu", items)
+    push_menu("Jimaku Subtitle Menu", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
 end
 
 -- Subtitles Submenu
@@ -470,9 +470,9 @@ show_subtitles_menu = function()
         {text = "2. Reload Current Subtitles", action = reload_subtitles_action},
         {text = "3. Download More (+5)", action = download_more_action},
         {text = "4. Clear All Loaded", action = clear_subs_action},
-        {text = "0. Back to Main Menu", action = pop_menu},
+        {text = "0. Back", action = pop_menu},
     }
-    push_menu("Subtitle Actions", items)
+    push_menu("Subtitle Actions", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
 end
 
 -- Subtitle Browser (Paginated)
@@ -635,9 +635,9 @@ show_search_menu = function()
             show_search_results_menu()
         end},
         {text = "3. Manual Title Search", action = nil, disabled = true, hint = "Not Implemented"},
-        {text = "0. Back to Main Menu", action = pop_menu},
+        {text = "0. Back", action = pop_menu},
     }
-    push_menu("Search & Selection", items)
+    push_menu("Search & Selection", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
 end
 
 -- AniList Results Browser (Paginated)
@@ -694,7 +694,7 @@ show_search_results_menu = function()
     
     table.insert(items, {text = "0. Back", action = pop_menu})
     
-    local title = string.format("AniList Results (Page %d/%d)", page, total_pages)
+    local title = string.format("AniList Results (%d/%d) - Total %d", page, total_pages, #results)
     push_menu(title, items, "[←/→] Page [UP/DOWN] Scroll [ENTER] Select")
 end
 
@@ -777,9 +777,9 @@ show_info_menu = function()
         {text = "2. View Log File Path", action = function() 
             mp.osd_message("Log: " .. LOG_FILE, 5); pop_menu() 
         end},
-        {text = "0. Back to Main Menu", action = pop_menu},
+        {text = "0. Back", action = pop_menu},
     }
-    push_menu("Information", items)
+    push_menu("Information", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
 end
 
 -- Settings Submenu
@@ -806,9 +806,9 @@ show_settings_menu = function()
             load_jimaku_api_key()
             pop_menu()
         end},
-        {text = "0. Back to Main Menu", action = pop_menu},
+        {text = "0. Back", action = pop_menu},
     }
-    push_menu("Settings", items)
+    push_menu("Settings", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
 end
 
 -- Cache Submenu
@@ -824,9 +824,9 @@ show_cache_menu = function()
             mp.osd_message("Memory cache cleared", 2)
             pop_menu()
         end},
-        {text = "0. Back to Main Menu", action = pop_menu},
+        {text = "0. Back", action = pop_menu},
     }
-    push_menu("Cache Management", items)
+    push_menu("Cache Management", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
 end
 
 -- Unified logging function
