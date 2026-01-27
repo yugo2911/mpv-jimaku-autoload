@@ -15,6 +15,8 @@ local SUBTITLE_CACHE_DIR
 local JIMAKU_API_KEY_FILE
 local ANILIST_API_URL = "https://graphql.anilist.co"
 local JIMAKU_API_URL = "https://jimaku.cc/api"
+-- local PAUSE_STATE = false -- re
+
 
 if STANDALONE_MODE then
     CONFIG_DIR = "."
@@ -38,13 +40,15 @@ local LOG_ONLY_ERRORS = false
 -- Jimaku configuration
 local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
 local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
-local JIMAKU_PREFERRED_GROUPS = {
+local JIMAKU_PREFERRED_GROUPS = {   -- Preferred loaded filename add wanted pattern SDH, NanakoRaws etc.. order matters
+
     {name = "WEBRip", enabled = true},
     {name = "WEB-DL", enabled = true},
     {name = "WEB", enabled = true},
     {name = "Amazon", enabled = true},
     {name = "AMZN", enabled = true},
-    {name = "Netflix", enabled = true}
+    {name = "Netflix", enabled = true},
+    {name = "CHS", enabled = false}
 }
 local JIMAKU_HIDE_SIGNS_ONLY = false
 local JIMAKU_ITEMS_PER_PAGE = 6
@@ -92,7 +96,6 @@ local menu_state = {
 
 -- Menu configuration
 local MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT
-local MENU_MAX_DISPLAY = 10  -- Maximum items to show at once
 
 -------------------------------------------------------------------------------
 -- MENU RENDERING & NAVIGATION
@@ -459,7 +462,7 @@ end
 show_subtitles_menu = function()
     local items = {
         {text = "1. Browse All Jimaku Subs  →", action = function()
-            menu_state.browser_page = nil -- Signal to jump to current episode
+            menu_state.browser_page = nil -- Signal to jump to current episode TODO:FIX THIS
             show_subtitle_browser()
         end},
         {text = "2. Reload Current Subtitles", action = reload_subtitles_action},
