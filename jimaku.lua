@@ -131,44 +131,22 @@ render_menu_osd = function()
     local selected = context.selected
     local footer = context.footer or (#menu_state.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close")
     
-    -- Use virtual resolution for consistent scaling
-    -- and align to top-left for predictable layout
-    local ass = "{\\playresy600}{\\an7}{\\pos(20,20)}"
-    ass = ass .. mp.get_property_osd("osd-ass-cc/0")
+    local ass = mp.get_property_osd("osd-ass-cc/0")
     
     -- Styling
-    local style_header = "{\\b1\\fs28\\c&H00FFFF&}"  -- Bold, yellow
-    local style_selected = "{\\b1\\fs22\\c&H00FF00&}"  -- Bold, green
-    local style_normal = "{\\fs22\\c&HFFFFFF&}"  -- Normal, white
-    local style_disabled = "{\\fs22\\c&H808080&}"  -- Gray
+    local style_header = "{\\b1\\fs24\\c&H00FFFF&}"  -- Bold, yellow
+    local style_selected = "{\\b1\\fs20\\c&H00FF00&}"  -- Bold, green
+    local style_normal = "{\\fs20\\c&HFFFFFF&}"  -- Normal, white
+    local style_disabled = "{\\fs20\\c&H808080&}"  -- Gray
     local style_footer = "{\\fs18\\c&HCCCCCC&}"  -- Small, light gray
-    local style_dim = "{\\fs18\\c&H888888&}"     -- Dim gray
+    local style_dim = "{\\fs16\\c&H888888&}"     -- Dim gray
     
-    -- Build menu header
+    -- Build menu
     ass = ass .. style_header .. title .. "\\N"
     ass = ass .. "{\\fs18\\c&H808080&}" .. string.rep("━", 40) .. "\\N"
     
-    -- Calculate visible slice for scrolling
-    local start_idx = 1
-    local end_idx = #items
-    
-    if #items > MENU_MAX_DISPLAY then
-        start_idx = math.max(1, selected - math.floor(MENU_MAX_DISPLAY / 2))
-        end_idx = start_idx + MENU_MAX_DISPLAY - 1
-        
-        if end_idx > #items then
-            end_idx = #items
-            start_idx = math.max(1, end_idx - MENU_MAX_DISPLAY + 1)
-        end
-        
-        if start_idx > 1 then
-            ass = ass .. style_dim .. "   (more above...)\\N"
-        end
-    end
-    
     -- Items
-    for i = start_idx, end_idx do
-        local item = items[i]
+    for i, item in ipairs(items) do
         local prefix = (i == selected) and "→ " or "  "
         local style = (i == selected) and style_selected or style_normal
         
@@ -178,15 +156,10 @@ render_menu_osd = function()
         
         local text = item.text
         if item.hint then
-            -- Handle very long hints by dimming them more or allowing wrap
             text = text .. " " .. style_dim .. "(" .. item.hint .. ")" .. style
         end
         
         ass = ass .. style .. prefix .. text .. "\\N"
-    end
-    
-    if end_idx < #items then
-        ass = ass .. style_dim .. "   (more below...)\\N"
     end
     
     -- Footer
@@ -319,7 +292,7 @@ clear_subs_action = function()
     pop_menu()
 end
 
--- Show detailed match info in a proper menu
+-- Show detailed match info
 show_current_match_info_action = function()
     local m = menu_state.current_match
     if not m then
@@ -327,19 +300,27 @@ show_current_match_info_action = function()
         return
     end
     
-    local items = {
-        {text = "Title:", hint = m.title or "N/A"},
-        {text = "AniList ID:", hint = tostring(m.anilist_id or "N/A")},
-        {text = "Season:", hint = tostring(m.season or "N/A")},
-        {text = "Episode:", hint = tostring(m.episode or "N/A")},
-        {text = "Format:", hint = m.format or "N/A"},
-        {text = "Total Eps:", hint = tostring(m.total_episodes or "N/A")},
-        {text = "Method:", hint = m.match_method or "N/A"},
-        {text = "Confidence:", hint = m.confidence or "N/A"},
-        {text = "0. Back", action = pop_menu},
-    }
+    local info = string.format(
+        "Current Match Info:\\N" ..
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
+        "Title: %s\\N" ..
+        "AniList ID: %s\\N" ..
+        "Season: %s | Episode: %s\\N" ..
+        "Format: %s | Episodes: %s\\N" ..
+        "Match Method: %s\\N" ..
+        "Confidence: %s",
+        m.title or "N/A",
+        m.anilist_id or "N/A",
+        m.season or "N/A",
+        m.episode or "N/A",
+        m.format or "N/A",
+        m.total_episodes or "?",
+        m.match_method or "N/A",
+        m.confidence or "N/A"
+    )
     
-    push_menu("Detailed Match Information", items)
+    mp.osd_message(info, 8)
+    pop_menu()
 end
 
 -- Download a specific subtitle file selected from browser
