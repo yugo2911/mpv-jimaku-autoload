@@ -36,7 +36,7 @@ end
 local LOG_ONLY_ERRORS = false
 
 -- Jimaku configuration
-local JIMAKU_MAX_SUBS = "all" -- Maximum number of subtitles to download and load (set to "all" to download all available)
+local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
 local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
 
 -- Jimaku API key (will be loaded from file)
@@ -71,7 +71,7 @@ local menu_state = {
     browser_page = 1,
     browser_files = nil,  -- Cached file list
     browser_filter = nil, -- Filter text
-    items_per_page = 7,   -- 1-7 for items, 8 Prev, 9 Next, 0 Back
+    items_per_page = 8,
     
     -- AniList search results (for manual picker)
     search_results = {},
@@ -116,8 +116,7 @@ close_menu = function()
         "menu-up", "menu-down", "menu-select", "menu-close",
         "menu-up-alt", "menu-down-alt", "menu-select-alt", "menu-back-alt", "menu-quit-alt",
         "menu-wheel-up", "menu-wheel-down", "menu-mbtn-left", "menu-mbtn-right",
-        "menu-search-slash", "menu-filter-f", "menu-clear-x",
-        "menu-left", "menu-right"
+        "menu-search-slash", "menu-filter-f", "menu-clear-x"
     }
     for _, name in ipairs(keys_to_remove) do
         mp.remove_key_binding(name)
@@ -142,7 +141,7 @@ render_menu_osd = function()
     local selected = context.selected
     local footer = context.footer or (#menu_state.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close")
     
-    local ass = mp.get_property_osd("osd-ass-cc/0") .. "{\\q2}"
+    local ass = mp.get_property_osd("osd-ass-cc/0")
     
     -- Styling
     local style_header = "{\\b1\\fs24\\c&H00FFFF&}"  -- Bold, yellow
@@ -191,12 +190,6 @@ local function conditional_osd(message, duration, is_auto)
     if not is_auto or INITIAL_OSD_MESSAGES then
         mp.osd_message(message, duration)
     end
-end
-
--- Helper to truncate long strings
-local function truncate_string(str, limit)
-    if not str or str:len() <= limit then return str end
-    return str:sub(1, limit - 3) .. "..."
 end
 
 -- Navigation functions
@@ -303,37 +296,6 @@ bind_menu_keys = function()
     mp.add_forced_key_binding("WHEEL_DOWN", "menu-wheel-down", handle_menu_down)
     mp.add_forced_key_binding("MBTN_LEFT", "menu-mbtn-left", handle_menu_select)
     mp.add_forced_key_binding("MBTN_RIGHT", "menu-mbtn-right", pop_menu)
-
-    -- Pagination keys
-    local function page_prev()
-        local stack = menu_state.stack[#menu_state.stack]
-        if not stack then return end
-        
-        if stack.title:match("Browse Jimaku Subs") and menu_state.browser_page > 1 then
-            menu_state.browser_page = menu_state.browser_page - 1
-            pop_menu(); show_subtitle_browser()
-        elseif stack.title:match("AniList Results") and menu_state.search_results_page > 1 then
-            menu_state.search_results_page = menu_state.search_results_page - 1
-            pop_menu(); show_search_results_menu()
-        end
-    end
-    
-    local function page_next()
-        local stack = menu_state.stack[#menu_state.stack]
-        if not stack then return end
-        
-        -- We need to check if there IS a next page. 
-        -- For simplicity, we'll just check if the "Next Page" item is in the menu or trigger the action if we can identify it.
-        for _, item in ipairs(stack.items) do
-            if item.text:match("Next Page") then
-                item.action()
-                return
-            end
-        end
-    end
-
-    mp.add_forced_key_binding("LEFT", "menu-left", page_prev)
-    mp.add_forced_key_binding("RIGHT", "menu-right", page_next)
     
     for i = 0, 9 do
         mp.add_forced_key_binding(tostring(i), "menu-num-" .. i, function() handle_menu_num(i) end)
@@ -457,7 +419,7 @@ show_main_menu = function()
         {text = "5. Cache          →", action = show_cache_menu},
     }
     
-    push_menu("Jimaku Subtitle Menu", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
+    push_menu("Jimaku Subtitle Menu", items)
 end
 
 -- Subtitles Submenu
@@ -470,9 +432,9 @@ show_subtitles_menu = function()
         {text = "2. Reload Current Subtitles", action = reload_subtitles_action},
         {text = "3. Download More (+5)", action = download_more_action},
         {text = "4. Clear All Loaded", action = clear_subs_action},
-        {text = "0. Back", action = pop_menu},
+        {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Subtitle Actions", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
+    push_menu("Subtitle Actions", items)
 end
 
 -- Subtitle Browser (Paginated)
@@ -486,30 +448,7 @@ show_subtitle_browser = function()
     -- Fetch files if not cached
     if not menu_state.browser_files then
         mp.osd_message("Fetching subtitle list...", 30)
-        local files = fetch_all_episode_files(jimaku_id)
-        
-        -- Sort files by Season and Episode
-        if files then
-            table.sort(files, function(a, b)
-                local sa, ea = parse_jimaku_filename(a.name)
-                local sb, eb = parse_jimaku_filename(b.name)
-                
-                -- Handle nil cases (non-numbered files go to bottom)
-                if not ea and not eb then return a.name < b.name end
-                if not ea then return false end
-                if not eb then return true end
-                
-                sa = sa or 1
-                sb = sb or 1
-                
-                if sa ~= sb then
-                    return sa < sb
-                end
-                return ea < eb
-            end)
-        end
-        
-        menu_state.browser_files = files
+        menu_state.browser_files = fetch_all_episode_files(jimaku_id)
         mp.osd_message("", 0)
     end
 
@@ -558,33 +497,17 @@ show_subtitle_browser = function()
         
         -- Parse numbering for display
         local s, e = parse_jimaku_filename(file.name)
+        local display_num = ""
+        if s and e then display_num = string.format("[S%02dE%02d] ", s, e)
+        elseif e then display_num = string.format("[E%s] ", tostring(e)) end
         
-        -- Check if it matches currently playing file
-        local is_current_match = false
-        if menu_state.current_match and e == menu_state.current_match.episode then
-            if not s or s == menu_state.current_match.season then
-                is_current_match = true
-            end
-        end
-
         local is_loaded = false
         for _, loaded_name in ipairs(menu_state.loaded_subs_files) do
             if loaded_name == file.name then is_loaded = true break end
         end
-
-        local display_num = ""
-        local style_num = is_loaded and "{\\c&HBBBBBB&}" or "{\\c&H00D7FF&}" -- Light Gray or Gold
-        local style_match = is_loaded and "{\\c&HBBBBBB&}" or "{\\c&H00FFFF&}" -- Light Gray or Yellow
-        local style_text = is_loaded and "{\\c&HBBBBBB&}" or "{\\r}" -- Light Gray or Reset
         
-        if s and e then 
-            display_num = string.format("%s[%02dE%02d] {\\r}%s", is_current_match and style_match or style_num, s, e, style_text)
-        elseif e then 
-            display_num = string.format("%s[E%s] {\\r}%s", is_current_match and style_match or style_num, tostring(e), style_text) 
-        end
-        
-        local filename_display = truncate_string(file.name, 60)
-        local item_text = string.format("%s%d. %s%s{\\r}", style_text, display_idx, display_num, filename_display)
+        local item_text = string.format("%d. %s%s", display_idx, display_num, file.name)
+        if is_loaded then item_text = "✓ " .. item_text end
         
         table.insert(items, {
             text = item_text,
@@ -594,14 +517,6 @@ show_subtitle_browser = function()
     end
     
     -- Navigation and Actions
-    if page > 1 then
-        table.insert(items, {text = "8. ← Previous Page", action = function()
-            menu_state.browser_page = page - 1
-            pop_menu()
-            show_subtitle_browser()
-        end})
-    end
-    
     if page < total_pages then
         table.insert(items, {text = "9. Next Page →", action = function()
             menu_state.browser_page = page + 1
@@ -613,7 +528,10 @@ show_subtitle_browser = function()
     table.insert(items, {text = "0. Back", action = pop_menu})
     
     -- Footer labels (non-numbered shortcuts)
-    local footer = "[F] Filter  [X] Clear  [←/→] Page  "
+    local footer = "[F] Filter / Jump  "
+    if menu_state.browser_filter then
+        footer = footer .. "[X] Clear Filter  "
+    end
     footer = footer .. "[UP/DOWN/Wheel] Scroll"
     
     local title_prefix = menu_state.browser_filter and string.format("FILTERED: '%s' ", menu_state.browser_filter) or ""
@@ -635,9 +553,9 @@ show_search_menu = function()
             show_search_results_menu()
         end},
         {text = "3. Manual Title Search", action = nil, disabled = true, hint = "Not Implemented"},
-        {text = "0. Back", action = pop_menu},
+        {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Search & Selection", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
+    push_menu("Search & Selection", items)
 end
 
 -- AniList Results Browser (Paginated)
@@ -676,13 +594,6 @@ show_search_results_menu = function()
     
     -- Pagination controls
     if total_pages > 1 then
-        if page > 1 then
-            table.insert(items, {text = "8. ← Previous Page", action = function()
-                menu_state.search_results_page = page - 1
-                pop_menu()
-                show_search_results_menu()
-            end})
-        end
         if page < total_pages then
             table.insert(items, {text = "9. Next Page →", action = function()
                 menu_state.search_results_page = page + 1
@@ -694,8 +605,8 @@ show_search_results_menu = function()
     
     table.insert(items, {text = "0. Back", action = pop_menu})
     
-    local title = string.format("AniList Results (%d/%d) - Total %d", page, total_pages, #results)
-    push_menu(title, items, "[←/→] Page [UP/DOWN] Scroll [ENTER] Select")
+    local title = string.format("AniList Results (Page %d/%d)", page, total_pages)
+    push_menu(title, items, "[UP/DOWN/Wheel] Scroll [ENTER/LeftClick] Select")
 end
 
 -- Select a specific AniList result and re-run subtitle matching
@@ -777,9 +688,9 @@ show_info_menu = function()
         {text = "2. View Log File Path", action = function() 
             mp.osd_message("Log: " .. LOG_FILE, 5); pop_menu() 
         end},
-        {text = "0. Back", action = pop_menu},
+        {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Information", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
+    push_menu("Information", items)
 end
 
 -- Settings Submenu
@@ -806,9 +717,9 @@ show_settings_menu = function()
             load_jimaku_api_key()
             pop_menu()
         end},
-        {text = "0. Back", action = pop_menu},
+        {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Settings", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
+    push_menu("Settings", items)
 end
 
 -- Cache Submenu
@@ -824,9 +735,9 @@ show_cache_menu = function()
             mp.osd_message("Memory cache cleared", 2)
             pop_menu()
         end},
-        {text = "0. Back", action = pop_menu},
+        {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Cache Management", items, "[UP/DOWN] Scroll [ENTER] Select [ESC] Close")
+    push_menu("Cache Management", items)
 end
 
 -- Unified logging function
