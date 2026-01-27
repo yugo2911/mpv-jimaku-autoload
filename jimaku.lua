@@ -46,7 +46,7 @@ local JIMAKU_API_KEY = ""
 local episode_cache = {}
 
 -- On-screen message configuration
-local auto_fetch_onscreen_messages = false -- if false, suppresses OSD messages during the initial auto-fetch
+local INITIAL_OSD_MESSAGES = false -- if false, suppresses initial OSD messages during startup
 
 -------------------------------------------------------------------------------
 -- MENU SYSTEM STATE
@@ -70,6 +70,7 @@ local menu_state = {
     -- Subtitle browser state
     browser_page = 1,
     browser_files = nil,  -- Cached file list
+    browser_filter = nil, -- Filter text
     items_per_page = 8,
     
     -- AniList search results (for manual picker)
@@ -95,7 +96,7 @@ local show_subtitle_browser, fetch_all_episode_files
 local parse_jimaku_filename, download_selected_subtitle_action
 local show_current_match_info_action, reload_subtitles_action
 local download_more_action, clear_subs_action, show_search_results_menu
-local select_anilist_result, handle_archive_file
+local select_anilist_result, handle_archive_file, apply_browser_filter
 
 -- Close menu and cleanup
 close_menu = function()
@@ -114,7 +115,8 @@ close_menu = function()
     local keys_to_remove = {
         "menu-up", "menu-down", "menu-select", "menu-close",
         "menu-up-alt", "menu-down-alt", "menu-select-alt", "menu-back-alt", "menu-quit-alt",
-        "menu-wheel-up", "menu-wheel-down", "menu-mbtn-left", "menu-mbtn-right"
+        "menu-wheel-up", "menu-wheel-down", "menu-mbtn-left", "menu-mbtn-right",
+        "menu-search-slash", "menu-filter-f", "menu-clear-x"
     }
     for _, name in ipairs(keys_to_remove) do
         mp.remove_key_binding(name)
@@ -185,7 +187,7 @@ end
 
 -- Helper for conditional OSD messages (suppress during auto-fetch if configured)
 local function conditional_osd(message, duration, is_auto)
-    if not is_auto or auto_fetch_onscreen_messages then
+    if not is_auto or INITIAL_OSD_MESSAGES then
         mp.osd_message(message, duration)
     end
 end
@@ -272,6 +274,22 @@ bind_menu_keys = function()
     mp.add_forced_key_binding("l", "menu-select-alt", handle_menu_select)
     mp.add_forced_key_binding("h", "menu-back-alt", pop_menu)
     mp.add_forced_key_binding("q", "menu-quit-alt", close_menu)
+    
+    -- Global actions
+    local function trigger_filter()
+        if menu_state.active and menu_state.stack[#menu_state.stack].title:match("Browse Jimaku Subs") then
+            mp.osd_message("Enter filter/episode in console", 3)
+            mp.commandv("script-message-to", "console", "type", "script-message jimaku-browser-filter ")
+        end
+    end
+    
+    mp.add_forced_key_binding("/", "menu-search-slash", trigger_filter)
+    mp.add_forced_key_binding("f", "menu-filter-f", trigger_filter)
+    mp.add_forced_key_binding("x", "menu-clear-x", function()
+        if menu_state.active and menu_state.stack[#menu_state.stack].title:match("Browse Jimaku Subs") then
+            apply_browser_filter(nil)
+        end
+    end)
     
     -- Mouse bindings
     mp.add_forced_key_binding("WHEEL_UP", "menu-wheel-up", handle_menu_up)
@@ -439,18 +457,43 @@ show_subtitle_browser = function()
         return
     end
 
-    local files = menu_state.browser_files
+    local all_files = menu_state.browser_files
+    local filtered_files = {}
+    
+    -- Apply filter if active
+    if menu_state.browser_filter then
+        local filter = menu_state.browser_filter:lower()
+        for _, file in ipairs(all_files) do
+            local name = file.name:lower()
+            -- Check filename or parsed episode number
+            local s, e = parse_jimaku_filename(file.name)
+            local ep_str = e and tostring(e) or ""
+            
+            if name:match(filter) or ep_str:match("^" .. filter .. "$") or ep_str:match("^0*" .. filter .. "$") then
+                table.insert(filtered_files, file)
+            end
+        end
+    else
+        filtered_files = all_files
+    end
+
     local page = menu_state.browser_page
     local per_page = menu_state.items_per_page
-    local total_pages = math.ceil(#files / per_page)
+    local total_pages = math.ceil(#filtered_files / per_page)
+    
+    -- Ensure page is valid after filtering
+    if page > total_pages and total_pages > 0 then page = total_pages end
+    if page < 1 then page = 1 end
     
     local start_idx = (page - 1) * per_page + 1
-    local end_idx = math.min(start_idx + per_page - 1, #files)
+    local end_idx = math.min(start_idx + per_page - 1, #filtered_files)
     
     local items = {}
+    
+    -- Subtitle files (Items 1-8)
     for i = start_idx, end_idx do
-        local file = files[i]
-        local idx = i - start_idx + 1
+        local file = filtered_files[i]
+        local display_idx = i - start_idx + 1
         
         -- Parse numbering for display
         local s, e = parse_jimaku_filename(file.name)
@@ -458,24 +501,22 @@ show_subtitle_browser = function()
         if s and e then display_num = string.format("[S%02dE%02d] ", s, e)
         elseif e then display_num = string.format("[E%s] ", tostring(e)) end
         
-        local hint = string.format("%.1f KB", file.size / 1024)
         local is_loaded = false
-        -- Check if file.name is in loaded_subs_files (simplified check)
         for _, loaded_name in ipairs(menu_state.loaded_subs_files) do
             if loaded_name == file.name then is_loaded = true break end
         end
         
-        local item_text = string.format("%d. %s%s", idx, display_num, file.name)
+        local item_text = string.format("%d. %s%s", display_idx, display_num, file.name)
         if is_loaded then item_text = "✓ " .. item_text end
         
         table.insert(items, {
             text = item_text,
-            hint = hint,
+            hint = string.format("%.1f KB", file.size / 1024),
             action = function() download_selected_subtitle_action(file) end
         })
     end
     
-    -- Navigation
+    -- Navigation and Actions
     if page < total_pages then
         table.insert(items, {text = "9. Next Page →", action = function()
             menu_state.browser_page = page + 1
@@ -486,10 +527,18 @@ show_subtitle_browser = function()
     
     table.insert(items, {text = "0. Back", action = pop_menu})
     
-    local title = string.format("Browse Jimaku Subs (Page %d/%d) - Total %d", 
-        page, total_pages, #files)
+    -- Footer labels (non-numbered shortcuts)
+    local footer = "[F] Filter / Jump  "
+    if menu_state.browser_filter then
+        footer = footer .. "[X] Clear Filter  "
+    end
+    footer = footer .. "[UP/DOWN/Wheel] Scroll"
     
-    push_menu(title, items)
+    local title_prefix = menu_state.browser_filter and string.format("FILTERED: '%s' ", menu_state.browser_filter) or ""
+    local title = string.format("%sBrowse Jimaku Subs (%d/%d) - Total %d", 
+        title_prefix, page, total_pages, #filtered_files)
+    
+    push_menu(title, items, footer)
 end
 
 -- Search Submenu
@@ -557,7 +606,7 @@ show_search_results_menu = function()
     table.insert(items, {text = "0. Back", action = pop_menu})
     
     local title = string.format("AniList Results (Page %d/%d)", page, total_pages)
-    push_menu(title, items)
+    push_menu(title, items, "[UP/DOWN/Wheel] Scroll [ENTER/LeftClick] Select")
 end
 
 -- Select a specific AniList result and re-run subtitle matching
@@ -612,6 +661,19 @@ select_anilist_result = function(selected)
     close_menu()
 end
 
+-- Apply a filter to the subtitle browser
+apply_browser_filter = function(filter_text)
+    debug_log("Applying browser filter: " .. (filter_text or "NONE"))
+    menu_state.browser_filter = filter_text
+    menu_state.browser_page = 1 -- Reset to first page of results
+    
+    -- Refresh the menu if it's currently showing the browser
+    if menu_state.active and menu_state.stack[#menu_state.stack].name:match("Browse Jimaku Subs") then
+        pop_menu()
+        show_subtitle_browser()
+    end
+end
+
 -- Information Submenu
 show_info_menu = function()
     local m = menu_state.current_match
@@ -647,8 +709,8 @@ show_settings_menu = function()
             else JIMAKU_MAX_SUBS = 1 end
             pop_menu(); show_settings_menu()  -- Refresh
         end},
-        {text = "3. Initial OSD Messages", hint = auto_fetch_onscreen_messages and "✓ Enabled" or "✗ Disabled", action = function()
-            auto_fetch_onscreen_messages = not auto_fetch_onscreen_messages
+        {text = "3. Initial OSD Messages", hint = INITIAL_OSD_MESSAGES and "✓ Enabled" or "✗ Disabled", action = function()
+            INITIAL_OSD_MESSAGES = not INITIAL_OSD_MESSAGES
             pop_menu(); show_settings_menu()  -- Refresh
         end},
         {text = "4. Reload API Key", action = function()
@@ -1995,7 +2057,7 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
 end
 
 -- Helper to check if a file is a compressed archive
-local function is_archive_file(filename)
+is_archive_file = function(filename)
     if not filename then return false end
     local ext = filename:match("%.([^%.]+)$")
     if not ext then return false end
@@ -2443,7 +2505,7 @@ search_anilist = function(is_auto)
         debug_log(string.format("Search title cleaned: '%s' → '%s'", parsed.title, search_title))
     end
 
-    mp.osd_message("AniList: Searching for " .. search_title .. "...", 3)
+    conditional_osd("AniList: Searching for " .. search_title .. "...", 3, is_auto)
 
     local query = [[
     query ($search: String) {
@@ -2619,6 +2681,11 @@ if not STANDALONE_MODE then
     -- Keyboard triggers for menu system (using standard bindings for script permanence)
     mp.add_key_binding("ctrl+j", "jimaku-menu-ctrl-j", show_main_menu)
     mp.add_key_binding("alt+a", "jimaku-menu-alt-a", show_main_menu)
+    
+    -- Script message for browser filtering
+    mp.register_script_message("jimaku-browser-filter", function(text)
+        apply_browser_filter(text ~= "" and text or nil)
+    end)
     
     -- Auto-download subtitles on file load if enabled
     if JIMAKU_AUTO_DOWNLOAD then
