@@ -300,6 +300,11 @@ local function clean_japanese_text(title)
     -- Remove common Japanese unicode ranges (simplified CJK removal)
     title = title:gsub("[\227-\233][\128-\191]+", "")
     
+    -- Remove orphaned parentheses/dashes from Japanese removal
+    title = title:gsub("%s*%(+%s*%-*%s*%)+%s*", " ")
+    title = title:gsub("%s*%(-+%)%s*", " ")
+    title = title:gsub("%s+%-+%s+%-+%s+", " - ")  -- "- text -" becomes single dash
+    
     -- Clean up resulting spaces
     title = title:gsub("%s+", " ")
     title = title:gsub("^%s+", ""):gsub("%s+$", "")
@@ -328,6 +333,18 @@ local function clean_parenthetical(title)
     
     -- Remove parenthetical year/date info: (2025), (2024)
     title = title:gsub("%s*%(20%d%d%)%s*", " ")
+    
+    -- Remove quality/format tags in parentheses
+    title = title:gsub("%s*%(BD[^%)]*%)%s*", " ")
+    title = title:gsub("%s*%(DVD[^%)]*%)%s*", " ")
+    title = title:gsub("%s*%(WEB[^%)]*%)%s*", " ")
+    title = title:gsub("%s*%(Blu%-ray[^%)]*%)%s*", " ")
+    title = title:gsub("%s*%(Remux[^%)]*%)%s*", " ")
+    
+    -- Remove RECAP tags
+    title = title:gsub("%s*%(RECAP%)%s*", " ")
+    title = title:gsub("%s*%[RECAP%]%s*", " ")
+    title = title:gsub("%s*RECAP%s*", " ")
     
     -- Remove empty parentheses
     title = title:gsub("%s*%(%s*%)%s*", " ")
@@ -529,7 +546,7 @@ local function parse_filename(filename)
         end
     end
     
-    -- Pattern D: Dash with number (MEDIUM confidence) - IMPROVED for version tags
+    -- Pattern D: Dash with number (MEDIUM confidence) - IMPROVED for version tags and high episodes
     if not result.episode then
         -- Try to match episode WITH version tag (e.g., "01v2")
         local t, ep, version = content:match("^(.-)%s*[%-%–—]%s*(%d+)(v%d+)")
@@ -539,15 +556,15 @@ local function parse_filename(filename)
             result.confidence = "medium-high"
             debug_log(string.format("Detected episode %s with version tag '%s'", ep, version))
         else
-            -- Standard dash pattern without version
-            local t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)%s*[%[%(%s]")
+            -- Standard dash pattern without version - SUPPORTS HIGH EPISODE NUMBERS
+            local t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+)%s*[%[%(%s]")
             if not t2 then
-                t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)$")
+                t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+)$")
             end
             if t2 and ep2 then
                 local ep_num = tonumber(ep2)
-                -- FIX #2: Validate: probably not a year or other number
-                if ep_num and ep_num >= 0 and ep_num <= 999 then
+                -- FIXED: Allow high episode numbers for long-running series (up to 9999)
+                if ep_num and ep_num >= 0 and ep_num <= 9999 then
                     result.title = t2
                     result.episode = ep2
                     result.confidence = "medium"
@@ -556,16 +573,16 @@ local function parse_filename(filename)
         end
     end
     
-    -- Pattern E: Space with number at end (LOW-MEDIUM confidence)
+    -- Pattern E: Space with number at end (LOW-MEDIUM confidence) - SUPPORTS HIGH EPISODES
     if not result.episode then
-        local t, ep = content:match("^(.-)%s+(%d+%.?%d*)%s*%[")
+        local t, ep = content:match("^(.-)%s+(%d+)%s*%[")
         if not t then
-            t, ep = content:match("^(.-)%s+(%d+%.?%d*)$")
+            t, ep = content:match("^(.-)%s+(%d+)$")
         end
         if t and ep then
             local ep_num = tonumber(ep)
-            -- More validation needed for this pattern
-            if ep_num and ep_num >= 1 and ep_num <= 999 and 
+            -- FIXED: Support high episode numbers, validate against title
+            if ep_num and ep_num >= 1 and ep_num <= 9999 and 
                not t:match("%d$") then  -- Title shouldn't end in number
                 result.title = t
                 result.episode = ep
@@ -652,18 +669,28 @@ local function parse_filename(filename)
     end
     
     -- Method 4: Trailing number (conservative - only for small numbers)
-    -- HOTFIX: Only run if "Part X" was NOT found
+    -- HOTFIX: Only run if "Part X" was NOT found AND number looks like season
     if not result.season and result.title and not part_num then
         local trailing = result.title:match("%s(%d+)$")
         if trailing then
             local num = tonumber(trailing)
-            -- Very conservative: only 2-6, and avoid numeric titles
+            -- VERY conservative: only 2-6, avoid numeric titles, and check if preceded by season-like word
+            local before_num = result.title:match("(%w+)%s+%d+$")
+            local is_season_context = before_num and (
+                before_num:lower():match("season") or
+                before_num:lower():match("part") or
+                before_num:lower():match("cour")
+            )
+            
             if num and num >= 2 and num <= 6 and 
                not result.title:match("^%d") and  -- Title doesn't start with number
-               not result.title:match("%d/%d") then  -- Not a fraction like "22/7"
+               not result.title:match("%d/%d") and  -- Not a fraction like "22/7"
+               not is_season_context then  -- NOT preceded by season-related word
                 result.season = num
                 result.title = result.title:gsub("%s%d+$", "")
                 debug_log(string.format("Detected Season %d from trailing number (low confidence)", num))
+            elseif is_season_context then
+                debug_log(string.format("Skipped trailing number %d - appears to be part of title", num))
             end
         end
     end
@@ -702,6 +729,12 @@ local function parse_filename(filename)
         result.confidence = "failed"
     end
     
+    -- Additional title cleaning
+    result.title = result.title:gsub("%s*%-+$", "")  -- Remove trailing dashes
+    result.title = result.title:gsub("^%-+%s*", "")  -- Remove leading dashes
+    result.title = result.title:gsub("%s+", " ")     -- Normalize spaces
+    result.title = result.title:gsub("^%s+", ""):gsub("%s+$", "")  -- Trim
+    
     if not result.episode then
         if result.is_movie then
             result.episode = "1"  -- Movies are episode 1
@@ -712,10 +745,14 @@ local function parse_filename(filename)
         end
     end
     
-    -- Validate episode number
+    -- Validate episode number (UPDATED for high episodes)
     local ep_num = tonumber(result.episode)
-    if ep_num and (ep_num < 0 or ep_num > 999) then
-        debug_log(string.format("WARNING: Episode number %d outside reasonable range", ep_num), true)
+    if ep_num then
+        if ep_num < 0 or ep_num > 9999 then
+            debug_log(string.format("WARNING: Episode number %d outside reasonable range (0-9999)", ep_num), true)
+        elseif ep_num > 999 then
+            debug_log(string.format("High episode number: %d (long-running series)", ep_num))
+        end
     end
     
     -- Validate season number
@@ -1553,6 +1590,28 @@ local function smart_match_anilist(results, parsed, episode_num, season_num)
     return selected, actual_episode, actual_season, seasons, match_method, match_confidence
 end
 
+-- Create a clean version of title for AniList search
+local function get_search_title(parsed)
+    local search_title = parsed.title
+    
+    -- If it's a special, remove special markers for better search
+    if parsed.is_special then
+        search_title = search_title:gsub("%s*Special%s*", " ")
+        search_title = search_title:gsub("%s*OVA%s*", " ")
+        search_title = search_title:gsub("%s*OAD%s*", " ")
+        search_title = search_title:gsub("%s*ONA%s*", " ")
+        search_title = search_title:gsub("%s*%-hen%s*", " ")  -- Japanese "hen" (arc/part)
+        
+        -- Clean up
+        search_title = search_title:gsub("%s*%-+%s*$", "")
+        search_title = search_title:gsub("^%s*%-+%s*", "")
+        search_title = search_title:gsub("%s+", " ")
+        search_title = search_title:gsub("^%s+", ""):gsub("%s+$", "")
+    end
+    
+    return search_title
+end
+
 -- Main search function with integrated smart matching
 local function search_anilist()
     local filename = mp.get_property("filename")
@@ -1563,8 +1622,15 @@ local function search_anilist()
         mp.osd_message("AniList: Failed to parse filename", 3)
         return
     end
+    
+    -- Get clean search title (removes "Special", "OVA" etc for better matching)
+    local search_title = get_search_title(parsed)
+    
+    if search_title ~= parsed.title then
+        debug_log(string.format("Search title cleaned: '%s' → '%s'", parsed.title, search_title))
+    end
 
-    mp.osd_message("AniList: Searching for " .. parsed.title .. "...", 3)
+    mp.osd_message("AniList: Searching for " .. search_title .. "...", 3)
 
     local query = [[
     query ($search: String) {
@@ -1584,14 +1650,14 @@ local function search_anilist()
     }
     ]]
 
-    local data = make_anilist_request(query, {search = parsed.title})
+    local data = make_anilist_request(query, {search = search_title})
 
     if data and data.Page and data.Page.media then
         local results = data.Page.media
         
         debug_log(string.format("Analyzing %d potential matches for '%s' %sE%s...", 
             #results, 
-            parsed.title, 
+            search_title,  -- Use search_title instead of parsed.title
             parsed.season and string.format("S%d ", parsed.season) or "",
             parsed.episode))
 
