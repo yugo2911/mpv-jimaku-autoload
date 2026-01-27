@@ -45,6 +45,9 @@ local JIMAKU_API_KEY = ""
 -- Episode file cache
 local episode_cache = {}
 
+-- On-screen message configuration
+local auto_fetch_onscreen_messages = false -- if false, suppresses OSD messages during the initial auto-fetch
+
 -------------------------------------------------------------------------------
 -- MENU SYSTEM STATE
 -------------------------------------------------------------------------------
@@ -67,7 +70,11 @@ local menu_state = {
     -- Subtitle browser state
     browser_page = 1,
     browser_files = nil,  -- Cached file list
-    items_per_page = 8
+    items_per_page = 8,
+    
+    -- AniList search results (for manual picker)
+    search_results = {},
+    search_results_page = 1
 }
 
 -- Menu configuration
@@ -87,7 +94,8 @@ local show_info_menu, show_settings_menu, show_cache_menu
 local show_subtitle_browser, fetch_all_episode_files
 local parse_jimaku_filename, download_selected_subtitle_action
 local show_current_match_info_action, reload_subtitles_action
-local download_more_action, clear_subs_action
+local download_more_action, clear_subs_action, show_search_results_menu
+local select_anilist_result
 
 -- Close menu and cleanup
 close_menu = function()
@@ -173,6 +181,13 @@ render_menu_osd = function()
         menu_state.timeout_timer:kill()
     end
     menu_state.timeout_timer = mp.add_timeout(MENU_TIMEOUT, close_menu)
+end
+
+-- Helper for conditional OSD messages (suppress during auto-fetch if configured)
+local function conditional_osd(message, duration, is_auto)
+    if not is_auto or auto_fetch_onscreen_messages then
+        mp.osd_message(message, duration)
+    end
 end
 
 -- Navigation functions
@@ -475,12 +490,122 @@ end
 
 -- Search Submenu
 show_search_menu = function()
+    local results_count = #menu_state.search_results
+    local results_hint = results_count > 0 and (results_count .. " found") or "No results"
+    
     local items = {
         {text = "1. Re-run AniList Search", action = function() search_anilist(); pop_menu() end},
-        {text = "2. Manual Title Search", action = nil, disabled = true, hint = "Not Implemented"},
+        {text = "2. Browse Search Results", hint = results_hint, disabled = results_count == 0, action = function()
+            menu_state.search_results_page = 1
+            show_search_results_menu()
+        end},
+        {text = "3. Manual Title Search", action = nil, disabled = true, hint = "Not Implemented"},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("Search & Selection", items)
+end
+
+-- AniList Results Browser (Paginated)
+show_search_results_menu = function()
+    local results = menu_state.search_results
+    if not results or #results == 0 then
+        mp.osd_message("No search results to display.", 3)
+        return
+    end
+
+    local page = menu_state.search_results_page
+    local per_page = menu_state.items_per_page
+    local total_pages = math.ceil(#results / per_page)
+    
+    local start_idx = (page - 1) * per_page + 1
+    local end_idx = math.min(start_idx + per_page - 1, #results)
+    
+    local items = {}
+    for i = start_idx, end_idx do
+        local media = results[i]
+        local title = media.title.romaji or "Unknown Title"
+        local year = media.seasonYear and (" [" .. media.seasonYear .. "]") or ""
+        local format = media.format and (" (" .. media.format .. ")") or ""
+        
+        local is_current = (menu_state.current_match and menu_state.current_match.anilist_id == media.id)
+        local prefix = is_current and "✓ " or ""
+        
+        table.insert(items, {
+            text = string.format("%d. %s%s", (i - start_idx + 1), prefix, title),
+            hint = format .. year,
+            action = function()
+                select_anilist_result(media)
+            end
+        })
+    end
+    
+    -- Pagination controls
+    if total_pages > 1 then
+        if page < total_pages then
+            table.insert(items, {text = "9. Next Page →", action = function()
+                menu_state.search_results_page = page + 1
+                pop_menu()
+                show_search_results_menu()
+            end})
+        end
+    end
+    
+    table.insert(items, {text = "0. Back", action = pop_menu})
+    
+    local title = string.format("AniList Results (Page %d/%d)", page, total_pages)
+    push_menu(title, items)
+end
+
+-- Select a specific AniList result and re-run subtitle matching
+select_anilist_result = function(selected)
+    debug_log("User manually selected AniList result: " .. (selected.title.romaji or selected.id))
+    
+    -- We need to re-calculate episode/season logic for THIS specific entry
+    -- We can reuse smart_match_anilist by passing it as the ONLY result
+    local episode_num = tonumber(menu_state.parsed_data.episode) or 1
+    local season_num = menu_state.parsed_data.season
+    local file_year = extract_year(mp.get_property("filename"))
+    
+    local media, actual_episode, actual_season, seasons, match_method, match_confidence = 
+        smart_match_anilist({selected}, menu_state.parsed_data, episode_num, season_num, file_year)
+
+    -- Update state
+    menu_state.anilist_id = selected.id
+    menu_state.current_match = {
+        title = selected.title.romaji,
+        anilist_id = selected.id,
+        episode = actual_episode,
+        season = actual_season,
+        format = selected.format,
+        total_episodes = selected.episodes,
+        match_method = "manual_selection",
+        confidence = "certain",
+        anilist_entry = selected
+    }
+    menu_state.seasons_data = seasons
+    
+    mp.osd_message("Selected: " .. selected.title.romaji, 3)
+    
+    -- Now try to fetch subtitles for this new match
+    local jimaku_entry = search_jimaku_subtitles(selected.id)
+    if jimaku_entry then
+        menu_state.jimaku_id = jimaku_entry.id
+        menu_state.jimaku_entry = jimaku_entry
+        menu_state.browser_files = nil -- Clear cache to force refresh
+        
+        download_subtitle_smart(
+            jimaku_entry.id, 
+            actual_episode, 
+            actual_season,
+            seasons,
+            selected
+        )
+    else
+        mp.osd_message("No Jimaku entry found for this show.", 3)
+    end
+    
+    -- Return to main menu or close? Let's return to main menu
+    close_menu()
 end
 
 -- Information Submenu
@@ -518,7 +643,11 @@ show_settings_menu = function()
             else JIMAKU_MAX_SUBS = 1 end
             pop_menu(); show_settings_menu()  -- Refresh
         end},
-        {text = "3. Reload API Key", action = function()
+        {text = "3. Initial OSD Messages", hint = auto_fetch_onscreen_messages and "✓ Enabled" or "✗ Disabled", action = function()
+            auto_fetch_onscreen_messages = not auto_fetch_onscreen_messages
+            pop_menu(); show_settings_menu()  -- Refresh
+        end},
+        {text = "4. Reload API Key", action = function()
             load_jimaku_api_key()
             pop_menu()
         end},
@@ -1774,7 +1903,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
 end
 
 -- Smart subtitle download with intelligent matching
-local function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anilist_entry)
+local function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anilist_entry, is_auto)
     -- Fetch all files for this entry
     local all_files = fetch_all_episode_files(entry_id)
     
@@ -1844,7 +1973,7 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
     end
     
     if success_count > 0 then
-        mp.osd_message(string.format("✓ Loaded %d subtitle(s)", success_count), 4)
+        conditional_osd(string.format("✓ Loaded %d subtitle(s)", success_count), 4, is_auto)
         -- Update menu state
         menu_state.loaded_subs_count = menu_state.loaded_subs_count + success_count
         for i = 1, success_count do
@@ -2203,13 +2332,13 @@ local function get_search_title(parsed)
 end
 
 -- Main search function with integrated smart matching
-search_anilist = function()
+search_anilist = function(is_auto)
     local filename = mp.get_property("filename")
     if not filename then return end
 
     local parsed = parse_filename(filename)
     if not parsed then
-        mp.osd_message("AniList: Failed to parse filename", 3)
+        conditional_osd("AniList: Failed to parse filename", 3, is_auto)
         return
     end
     
@@ -2274,6 +2403,10 @@ search_anilist = function()
     if data and data.Page and data.Page.media then
         local results = data.Page.media
         
+        -- Store for manual picker
+        menu_state.search_results = results
+        menu_state.search_results_page = 1
+        
         -- Extract year from filename for disambiguation
         local file_year = extract_year(filename)
         if file_year then
@@ -2289,7 +2422,7 @@ search_anilist = function()
         -- If we have 0 results, show helpful message
         if #results == 0 then
             debug_log("FAILURE: No matches found after all fallback attempts", true)
-            mp.osd_message("AniList: No match found.\nTry renaming file or manual search.", 5)
+            conditional_osd("AniList: No match found.\nTry renaming file or manual search.", 5, is_auto)
             return
         end
 
@@ -2305,7 +2438,7 @@ search_anilist = function()
         
         -- Warn user if match confidence is very low (wrong show)
         if match_confidence == "very-low" then
-            mp.osd_message("⚠ WARNING: Match uncertain - result may be wrong anime!\nPress 'A' to retry or rename file.", 8)
+            conditional_osd("⚠ WARNING: Match uncertain - result may be wrong anime!\nPress 'A' to retry or rename file.", 8, is_auto)
         end
         
         -- Final reporting with Type/Format
@@ -2352,7 +2485,7 @@ search_anilist = function()
             osd_msg = osd_msg .. "\n⚠ Low confidence - verify result"
         end
         
-        mp.osd_message(osd_msg, 5)
+        conditional_osd(osd_msg, 5, is_auto)
 
         -- Try to fetch subtitles from Jimaku using smart matching
         local jimaku_entry = search_jimaku_subtitles(selected.id)
@@ -2368,12 +2501,13 @@ search_anilist = function()
                 actual_episode, 
                 actual_season,
                 seasons,
-                selected  -- Pass full AniList entry for verification
+                selected,  -- Pass full AniList entry for verification
+                is_auto
             )
         end
     else
         debug_log("FAILURE: No matches found for " .. parsed.title, true)
-        mp.osd_message("AniList: No match found.", 3)
+        conditional_osd("AniList: No match found.", 3, is_auto)
     end
 end
 
@@ -2402,7 +2536,7 @@ if not STANDALONE_MODE then
             update_loaded_subs_list()
             
             -- Small delay to ensure file is ready
-            mp.add_timeout(0.5, search_anilist)
+            mp.add_timeout(0.5, function() search_anilist(true) end)
         end)
         debug_log("AniList Script Initialized. Press 'Ctrl+j' or 'Alt+a' for menu.")
     else
