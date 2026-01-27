@@ -413,9 +413,9 @@ download_selected_subtitle_action = function(file)
     
     if download_result.status == 0 then
         if is_archive_file(file.name) then
-            handle_archive_file(subtitle_path)
+            handle_archive_file(subtitle_path, "select")
         else
-            mp.commandv("sub-add", subtitle_path)
+            mp.commandv("sub-add", subtitle_path, "select")
             mp.osd_message("✓ Loaded: " .. file.name, 4)
             -- Update state
             table.insert(menu_state.loaded_subs_files, file.name)
@@ -2198,15 +2198,18 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
         })
         
         if download_result.status == 0 then
+            -- Pass "select" only for the first subtitle download (TOP MATCH)
+            local load_flag = (success_count == 0) and "select" or "auto"
+            
             if is_archive_file(subtitle_file.name) then
-                if handle_archive_file(subtitle_path) then
+                if handle_archive_file(subtitle_path, load_flag) then
                     success_count = success_count + 1
                 end
             else
                 -- Load subtitle into mpv
-                mp.commandv("sub-add", subtitle_path)
-                debug_log(string.format("Successfully loaded subtitle [%d/%d]: %s", 
-                    i, max_downloads, subtitle_file.name))
+                mp.commandv("sub-add", subtitle_path, load_flag)
+                debug_log(string.format("Successfully loaded subtitle [%d/%d] (%s): %s", 
+                    i, max_downloads, load_flag, subtitle_file.name))
                 -- Update menu state tracking for regular files
                 table.insert(menu_state.loaded_subs_files, subtitle_file.name)
                 menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
@@ -2237,7 +2240,7 @@ is_archive_file = function(filename)
 end
 
 -- Extract and load subtitles from an archive
-handle_archive_file = function(archive_path)
+handle_archive_file = function(archive_path, default_flag)
     debug_log("Handling archive: " .. archive_path)
     
     -- Create a unique extraction directory based on filename
@@ -2286,8 +2289,11 @@ handle_archive_file = function(archive_path)
                     ext = ext:lower()
                     if ext == "ass" or ext == "srt" or ext == "vtt" or ext == "sub" then
                         local sub_path = extract_dir .. "/" .. f
-                        debug_log("Found and loading internal sub: " .. f)
-                        mp.commandv("sub-add", sub_path)
+                        -- If more than one sub in archive, only select the first one encountered
+                        local flag = (loaded_count == 0) and (default_flag or "auto") or "auto"
+                        
+                        debug_log(string.format("Found internal sub: %s (flag: %s)", f, flag))
+                        mp.commandv("sub-add", sub_path, flag)
                         loaded_count = loaded_count + 1
                         
                         -- Track for menu
