@@ -88,14 +88,14 @@ local MENU_MAX_DISPLAY = 10  -- Maximum items to show at once
 -- Forward declare local functions for correct scoping
 local render_menu_osd, close_menu, push_menu, pop_menu
 local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_select, handle_menu_num
-local debug_log, search_anilist, load_jimaku_api_key
+local debug_log, search_anilist, load_jimaku_api_key, is_archive_file
 local show_main_menu, show_subtitles_menu, show_search_menu
 local show_info_menu, show_settings_menu, show_cache_menu
 local show_subtitle_browser, fetch_all_episode_files
 local parse_jimaku_filename, download_selected_subtitle_action
 local show_current_match_info_action, reload_subtitles_action
 local download_more_action, clear_subs_action, show_search_results_menu
-local select_anilist_result
+local select_anilist_result, handle_archive_file
 
 -- Close menu and cleanup
 close_menu = function()
@@ -361,11 +361,15 @@ download_selected_subtitle_action = function(file)
     })
     
     if download_result.status == 0 then
-        mp.commandv("sub-add", subtitle_path)
-        mp.osd_message("✓ Loaded: " .. file.name, 4)
-        -- Update state
-        table.insert(menu_state.loaded_subs_files, file.name)
-        menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+        if is_archive_file(file.name) then
+            handle_archive_file(subtitle_path)
+        else
+            mp.commandv("sub-add", subtitle_path)
+            mp.osd_message("✓ Loaded: " .. file.name, 4)
+            -- Update state
+            table.insert(menu_state.loaded_subs_files, file.name)
+            menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+        end
         -- Refresh browser to show checkmark
         pop_menu()
         show_subtitle_browser()
@@ -1961,11 +1965,20 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
         })
         
         if download_result.status == 0 then
-            -- Load subtitle into mpv
-            mp.commandv("sub-add", subtitle_path)
-            debug_log(string.format("Successfully loaded subtitle [%d/%d]: %s", 
-                i, max_downloads, subtitle_file.name))
-            success_count = success_count + 1
+            if is_archive_file(subtitle_file.name) then
+                if handle_archive_file(subtitle_path) then
+                    success_count = success_count + 1
+                end
+            else
+                -- Load subtitle into mpv
+                mp.commandv("sub-add", subtitle_path)
+                debug_log(string.format("Successfully loaded subtitle [%d/%d]: %s", 
+                    i, max_downloads, subtitle_file.name))
+                -- Update menu state tracking for regular files
+                table.insert(menu_state.loaded_subs_files, subtitle_file.name)
+                menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+                success_count = success_count + 1
+            end
         else
             debug_log(string.format("Failed to download subtitle [%d/%d]: %s", 
                 i, max_downloads, subtitle_file.name), true)
@@ -1973,15 +1986,96 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
     end
     
     if success_count > 0 then
-        conditional_osd(string.format("✓ Loaded %d subtitle(s)", success_count), 4, is_auto)
-        -- Update menu state
-        menu_state.loaded_subs_count = menu_state.loaded_subs_count + success_count
-        for i = 1, success_count do
-            table.insert(menu_state.loaded_subs_files, matched_files[i].name)
-        end
+        conditional_osd(string.format("✓ Loaded matched subtitle(s)"), 4, is_auto)
         return true
     else
-        debug_log("Failed to download any subtitles", true)
+        debug_log("Failed to download or extract any subtitles", true)
+        return false
+    end
+end
+
+-- Helper to check if a file is a compressed archive
+local function is_archive_file(filename)
+    if not filename then return false end
+    local ext = filename:match("%.([^%.]+)$")
+    if not ext then return false end
+    ext = ext:lower()
+    return ext == "zip" or ext == "rar" or ext == "7z" or ext == "tar" or ext == "gz"
+end
+
+-- Extract and load subtitles from an archive
+handle_archive_file = function(archive_path)
+    debug_log("Handling archive: " .. archive_path)
+    
+    -- Create a unique extraction directory based on filename
+    local filename = archive_path:match("([^/\\%.]+)%.[^%.]+$") or "extracted"
+    local extract_dir = SUBTITLE_CACHE_DIR .. "/extracted_" .. filename .. "_" .. os.time()
+    
+    -- Create directory
+    if STANDALONE_MODE then
+        os.execute("mkdir -p \"" .. extract_dir .. "\"")
+    else
+        mp.command_native({
+            name = "subprocess",
+            playback_only = false,
+            args = {"mkdir", extract_dir}
+        })
+    end
+    
+    -- Extract using tar (cross-platform)
+    -- Note: tar on Windows 10+ supports zip, 7z, rar (if libarchive is present), and tar
+    debug_log("Extracting to: " .. extract_dir)
+    local tar_args = {"tar", "-xf", archive_path, "-C", extract_dir}
+    
+    local extract_result
+    if STANDALONE_MODE then
+        local cmd = table.concat(tar_args, " ")
+        extract_result = {status = os.execute(cmd) and 0 or 1}
+    else
+        extract_result = mp.command_native({
+            name = "subprocess",
+            playback_only = false,
+            args = tar_args
+        })
+    end
+    
+    if extract_result.status == 0 then
+        debug_log("Extraction successful, scanning for subtitles...")
+        
+        -- Scan extracted directory for subtitle files
+        local files = utils.readdir(extract_dir, "files")
+        local loaded_count = 0
+        
+        if files then
+            for _, f in ipairs(files) do
+                local ext = f:match("%.([^%.]+)$")
+                if ext then
+                    ext = ext:lower()
+                    if ext == "ass" or ext == "srt" or ext == "vtt" or ext == "sub" then
+                        local sub_path = extract_dir .. "/" .. f
+                        debug_log("Found and loading internal sub: " .. f)
+                        mp.commandv("sub-add", sub_path)
+                        loaded_count = loaded_count + 1
+                        
+                        -- Track for menu
+                        table.insert(menu_state.loaded_subs_files, f)
+                    end
+                end
+            end
+        end
+        
+        if loaded_count > 0 then
+            mp.osd_message(string.format("✓ Extracted & loaded %d subtitle(s)", loaded_count), 4)
+            menu_state.loaded_subs_count = menu_state.loaded_subs_count + loaded_count
+            return true
+        else
+            debug_log("No subtitle files found inside archive", true)
+            mp.osd_message("Archive contains no subtitles!", 4)
+            return false
+        end
+    else
+        debug_log("Extraction failed with status: " .. tostring(extract_result.status), true)
+        mp.osd_message("Failed to extract archive!", 4)
         return false
     end
 end
