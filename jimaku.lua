@@ -712,9 +712,11 @@ apply_browser_filter = function(filter_text)
     menu_state.browser_page = 1 -- Reset to first page of results
     
     -- Refresh the menu if it's currently showing the browser
-    if menu_state.active and menu_state.stack[#menu_state.stack].name:match("Browse Jimaku Subs") then
+    if menu_state.active and #menu_state.stack > 0 and menu_state.stack[#menu_state.stack].title:match("Browse Jimaku Subs") then
         pop_menu()
         show_subtitle_browser()
+    else
+        render_menu_osd()
     end
 end
 
@@ -841,7 +843,6 @@ show_preferred_groups_menu = function(selected)
     table.insert(items, {text = "9. Add New Group", action = function()
         mp.osd_message("Enter groups (comma separated) in console", 3)
         mp.commandv("script-message-to", "console", "type", "script-message jimaku-set-groups ")
-        pop_menu()
     end})
     table.insert(items, {text = "0. Back to Filter Settings", action = pop_menu})
     
@@ -2859,32 +2860,36 @@ if not STANDALONE_MODE then
     
     -- Script message for preferred groups
     mp.register_script_message("jimaku-set-groups", function(text)
-        if not text or text == "" then return end
-        local new_groups = {}
-        for group in string.gmatch(text, "([^,]+)") do
-            group = group:gsub("^%s*(.-)%s*$", "%1")
-            if group ~= "" then
-                table.insert(new_groups, {name = group, enabled = true})
+        if text and text ~= "" then
+            local new_groups = {}
+            for group in string.gmatch(text, "([^,]+)") do
+                group = group:gsub("^%s*(.-)%s*$", "%1")
+                if group ~= "" then
+                    table.insert(new_groups, {name = group, enabled = true})
+                end
+            end
+            if #new_groups > 0 then
+                for _, ng in ipairs(new_groups) do
+                    local exists = false
+                    for _, eg in ipairs(JIMAKU_PREFERRED_GROUPS) do
+                        if eg.name:lower() == ng.name:lower() then exists = true break end
+                    end
+                    if not exists then
+                        table.insert(JIMAKU_PREFERRED_GROUPS, ng)
+                    end
+                end
+                debug_log("Updated preferred groups list")
+                mp.osd_message("Added groups to list", 3)
             end
         end
-        if #new_groups > 0 then
-            -- Append or replace? Let's append to existing list if not present
-            for _, ng in ipairs(new_groups) do
-                local exists = false
-                for _, eg in ipairs(JIMAKU_PREFERRED_GROUPS) do
-                    if eg.name:lower() == ng.name:lower() then exists = true break end
-                end
-                if not exists then
-                    table.insert(JIMAKU_PREFERRED_GROUPS, ng)
-                end
-            end
-            debug_log("Updated preferred groups list")
-            mp.osd_message("Added groups to list", 3)
-            -- Refresh menu if open
-            if menu_state.active and menu_state.stack[#menu_state.stack].title == "Preferred Groups" then
-                pop_menu()
-                show_preferred_groups_menu()
-            end
+        
+        -- Always refresh or re-render menu if we were in Management
+        if menu_state.active and #menu_state.stack > 0 and menu_state.stack[#menu_state.stack].title == "Preferred Groups" then
+            local selected = menu_state.stack[#menu_state.stack].selected
+            pop_menu()
+            show_preferred_groups_menu(selected)
+        else
+            render_menu_osd()
         end
     end)
     
