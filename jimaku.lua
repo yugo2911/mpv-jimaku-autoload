@@ -81,6 +81,13 @@ local MENU_MAX_DISPLAY = 10  -- Maximum items to show at once
 -- Forward declare local functions for correct scoping
 local render_menu_osd, close_menu, push_menu, pop_menu
 local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_select, handle_menu_num
+local debug_log, search_anilist, load_jimaku_api_key
+local show_main_menu, show_subtitles_menu, show_search_menu
+local show_info_menu, show_settings_menu, show_cache_menu
+local show_subtitle_browser, fetch_all_episode_files
+local parse_jimaku_filename, download_selected_subtitle_action
+local show_current_match_info_action, reload_subtitles_action
+local download_more_action, clear_subs_action
 
 -- Close menu and cleanup
 close_menu = function()
@@ -210,6 +217,32 @@ handle_menu_num = function(n)
     end
 end
 
+-- Navigation functions
+push_menu = function(title, items, footer)
+    debug_log("Pushing menu: " .. title)
+    if #menu_state.stack == 0 then
+        bind_menu_keys()
+    end
+    table.insert(menu_state.stack, {
+        title = title,
+        items = items,
+        selected = 1,
+        footer = footer
+    })
+    menu_state.active = true
+    render_menu_osd()
+end
+
+pop_menu = function()
+    debug_log("Popping menu")
+    if #menu_state.stack > 1 then
+        table.remove(menu_state.stack)
+        render_menu_osd()
+    else
+        close_menu()
+    end
+end
+
 bind_menu_keys = function()
     -- Primary keys
     mp.add_forced_key_binding("UP", "menu-up", handle_menu_up)
@@ -235,30 +268,25 @@ end
 -- MENU DEFINITIONS & ACTIONS
 -------------------------------------------------------------------------------
 
--- Forward declarations
-local show_main_menu, show_subtitles_menu, show_search_menu
-local show_info_menu, show_settings_menu, show_cache_menu
-local show_subtitle_browser
-
--- Action handler placeholders (will be implemented next)
-local function reload_subtitles_action()
+-- Action handlers
+reload_subtitles_action = function()
     mp.osd_message("Reloading...", 2)
     pop_menu()
 end
 
-local function download_more_action()
+download_more_action = function()
     mp.osd_message("Downloading more...", 2)
     pop_menu()
 end
 
-local function clear_subs_action()
+clear_subs_action = function()
     mp.command("sub-remove")
     mp.osd_message("✓ Subtitles cleared", 2)
     pop_menu()
 end
 
 -- Show detailed match info
-local function show_current_match_info_action()
+show_current_match_info_action = function()
     local m = menu_state.current_match
     if not m then
         mp.osd_message("No match information available", 3)
@@ -289,7 +317,7 @@ local function show_current_match_info_action()
 end
 
 -- Download a specific subtitle file selected from browser
-local function download_selected_subtitle_action(file)
+download_selected_subtitle_action = function(file)
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
         mp.osd_message("Error: Jimaku API key not set", 3)
         return
@@ -326,6 +354,19 @@ end
 
 -- Main Menu
 show_main_menu = function()
+    debug_log("Main menu action triggered")
+    
+    -- If already active, close it first (toggle behavior)
+    if menu_state.active then
+        debug_log("Menu already active, closing first")
+        close_menu()
+        return
+    end
+    
+    -- Reset state for a fresh start
+    menu_state.stack = {}
+    menu_state.active = false
+    
     local items = {
         {text = "1. Subtitles      →", action = show_subtitles_menu},
         {text = "2. Search         →", action = show_search_menu},
@@ -334,13 +375,7 @@ show_main_menu = function()
         {text = "5. Cache          →", action = show_cache_menu},
     }
     
-    if #menu_state.stack > 0 then
-        if not menu_state.active then
-            push_menu("Jimaku Subtitle Menu", items)
-        end
-    else
-        push_menu("Jimaku Subtitle Menu", items)
-    end
+    push_menu("Jimaku Subtitle Menu", items)
 end
 
 -- Subtitles Submenu
@@ -504,7 +539,7 @@ show_cache_menu = function()
 end
 
 -- Unified logging function
-local function debug_log(message, is_error)
+debug_log = function(message, is_error)
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local prefix = is_error and "[ERROR] " or "[INFO] "
     local log_msg = string.format("%s %s%s\n", timestamp, prefix, message)
@@ -524,7 +559,7 @@ local function debug_log(message, is_error)
 end
 
 -- Load Jimaku API key from file
-local function load_jimaku_api_key()
+load_jimaku_api_key = function()
     local f = io.open(JIMAKU_API_KEY_FILE, "r")
     if f then
         local key = f:read("*l")
@@ -638,7 +673,7 @@ end
 -------------------------------------------------------------------------------
 
 -- Parse Jimaku subtitle filename to extract episode number(s)
-local function parse_jimaku_filename(filename)
+parse_jimaku_filename = function(filename)
     if not filename then return nil, nil end
     
     -- Normalize full-width digits
@@ -1379,7 +1414,7 @@ local function search_jimaku_subtitles(anilist_id)
 end
 
 -- Fetch ALL subtitle files for an entry (no episode filter)
-local function fetch_all_episode_files(entry_id)
+fetch_all_episode_files = function(entry_id)
     -- Check cache first
     if episode_cache[entry_id] then
         local cache_age = os.time() - episode_cache[entry_id].timestamp
@@ -2161,7 +2196,7 @@ local function get_search_title(parsed)
 end
 
 -- Main search function with integrated smart matching
-local function search_anilist()
+search_anilist = function()
     local filename = mp.get_property("filename")
     if not filename then return end
 
@@ -2346,9 +2381,9 @@ if not STANDALONE_MODE then
     -- Keybind 'A' to trigger the search
     mp.add_key_binding("A", "anilist-search", search_anilist)
     
-    -- Keyboard triggers for menu system (forced to ensure they stay active)
-    mp.add_forced_key_binding("ctrl+j", "menu-main-ctrl-j", show_main_menu)
-    mp.add_forced_key_binding("alt+a", "menu-main-alt-a", show_main_menu)
+    -- Keyboard triggers for menu system (using standard bindings for script permanence)
+    mp.add_key_binding("ctrl+j", "jimaku-menu-ctrl-j", show_main_menu)
+    mp.add_key_binding("alt+a", "jimaku-menu-alt-a", show_main_menu)
     
     -- Auto-download subtitles on file load if enabled
     if JIMAKU_AUTO_DOWNLOAD then
