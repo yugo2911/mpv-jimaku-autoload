@@ -1335,7 +1335,6 @@ local function smart_match_anilist(results, parsed, episode_num, season_num)
                    full_text:lower():match("part%s*3")) then
                     seasons[3] = {media = media, eps = media.episodes, name = media.title.romaji}
                 end
-                end
             end
         end
         
