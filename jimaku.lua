@@ -284,11 +284,62 @@ local function parse_jimaku_filename(filename)
 end
 
 -------------------------------------------------------------------------------
--- MAIN FILENAME PARSER
+-- MAIN FILENAME PARSER (WITH CRITICAL HOTFIXES)
 -- FIX #3: Improved title extraction with validation
+-- HOTFIX: Japanese text, version tags, Part detection
 -------------------------------------------------------------------------------
 
--- Helper function: Extract title safely with validation
+-- NEW: Strip Japanese/CJK characters and clean complex titles
+local function clean_japanese_text(title)
+    if not title then return title end
+    
+    -- Remove content in Japanese brackets 「」『』
+    title = title:gsub("「[^」]*」", "")
+    title = title:gsub("『[^』]*』", "")
+    
+    -- Remove common Japanese unicode ranges (simplified CJK removal)
+    title = title:gsub("[\227-\233][\128-\191]+", "")
+    
+    -- Clean up resulting spaces
+    title = title:gsub("%s+", " ")
+    title = title:gsub("^%s+", ""):gsub("%s+$", "")
+    
+    return title
+end
+
+-- NEW: Strip version tags (v2, v3, etc.)
+local function strip_version_tag(str)
+    if not str then return str end
+    
+    -- Remove version tags like "v2", "v3" etc
+    str = str:gsub("%s*v%d+%s*", " ")
+    str = str:gsub("%-v%d+", "")
+    
+    -- Clean up spaces
+    str = str:gsub("%s+", " ")
+    str = str:gsub("^%s+", ""):gsub("%s+$", "")
+    
+    return str
+end
+
+-- NEW: Clean parenthetical content intelligently
+local function clean_parenthetical(title)
+    if not title then return title end
+    
+    -- Remove parenthetical year/date info: (2025), (2024)
+    title = title:gsub("%s*%(20%d%d%)%s*", " ")
+    
+    -- Remove empty parentheses
+    title = title:gsub("%s*%(%s*%)%s*", " ")
+    
+    -- Clean up spaces
+    title = title:gsub("%s+", " ")
+    title = title:gsub("^%s+", ""):gsub("%s+$", "")
+    
+    return title
+end
+
+-- Helper function: Extract title safely with validation (IMPROVED)
 local function extract_title_safe(content, episode_marker)
     if not content then return nil end
     
@@ -323,10 +374,22 @@ local function extract_title_safe(content, episode_marker)
         title = title:gsub("%s*HEVC.*$", "")
     end
     
+    -- HOTFIX: Strip version tags
+    title = strip_version_tag(title)
+    
+    -- HOTFIX: Clean Japanese text
+    title = clean_japanese_text(title)
+    
+    -- HOTFIX: Clean parenthetical content
+    title = clean_parenthetical(title)
+    
     -- Clean up
     title = title:gsub("[%._]", " ")        -- Dots and underscores to spaces
     title = title:gsub("%s+", " ")          -- Multiple spaces to single
     title = title:gsub("^%s+", ""):gsub("%s+$", "")  -- Trim
+    
+    -- HOTFIX: Remove "Part" suffix that might be left over
+    title = title:gsub("%s+Part$", "")
     
     -- Validation: title must be reasonable
     if not title or title:len() < 2 or title:len() > 200 then
@@ -403,6 +466,7 @@ local function parse_filename(filename)
         quality = nil,
         group = nil,
         is_special = false,
+        is_movie = false,  -- NEW: Track if it's a movie
         confidence = "low"  -- Track parsing confidence
     }
     
@@ -465,19 +529,29 @@ local function parse_filename(filename)
         end
     end
     
-    -- Pattern D: Dash with number (MEDIUM confidence)
+    -- Pattern D: Dash with number (MEDIUM confidence) - IMPROVED for version tags
     if not result.episode then
-        local t, ep = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)%s*[%[%(%s]")
-        if not t then
-            t, ep = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)$")
-        end
+        -- Try to match episode WITH version tag (e.g., "01v2")
+        local t, ep, version = content:match("^(.-)%s*[%-%–—]%s*(%d+)(v%d+)")
         if t and ep then
-            local ep_num = tonumber(ep)
-            -- FIX #2: Validate: probably not a year or other number
-            if ep_num and ep_num >= 0 and ep_num <= 999 then
-                result.title = t
-                result.episode = ep
-                result.confidence = "medium"
+            result.title = t
+            result.episode = ep
+            result.confidence = "medium-high"
+            debug_log(string.format("Detected episode %s with version tag '%s'", ep, version))
+        else
+            -- Standard dash pattern without version
+            local t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)%s*[%[%(%s]")
+            if not t2 then
+                t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)$")
+            end
+            if t2 and ep2 then
+                local ep_num = tonumber(ep2)
+                -- FIX #2: Validate: probably not a year or other number
+                if ep_num and ep_num >= 0 and ep_num <= 999 then
+                    result.title = t2
+                    result.episode = ep2
+                    result.confidence = "medium"
+                end
             end
         end
     end
@@ -513,9 +587,28 @@ local function parse_filename(filename)
         
         -- Remove common trailing junk
         result.title = result.title:gsub("%s*[%-%_%.]+$", "")
+        
+        -- HOTFIX: Additional cleaning passes
+        result.title = strip_version_tag(result.title)
+        result.title = clean_japanese_text(result.title)
+        result.title = clean_parenthetical(result.title)
+        
+        -- Clean up again after all transformations
+        result.title = result.title:gsub("%s+", " ")
+        result.title = result.title:gsub("^%s+", ""):gsub("%s+$", "")
     end
     
     -- SEASON DETECTION (if not already found)
+    
+    -- HOTFIX: Remove "Part X" before season detection
+    local part_num = nil
+    if result.title then
+        part_num = result.title:match("%s+Part%s+(%d+)$")
+        if part_num then
+            result.title = result.title:gsub("%s+Part%s+%d+$", "")
+            debug_log(string.format("Removed 'Part %s' from title (not a season marker)", part_num))
+        end
+    end
     
     -- Method 1: Roman numerals (e.g., "Overlord II" -> Season 2)
     if not result.season and result.title then
@@ -560,7 +653,8 @@ local function parse_filename(filename)
     end
     
     -- Method 4: Trailing number (conservative - only for small numbers)
-    if not result.season and result.title then
+    -- HOTFIX: Only run if "Part X" was NOT found
+    if not result.season and result.title and not part_num then
         local trailing = result.title:match("%s(%d+)$")
         if trailing then
             local num = tonumber(trailing)
@@ -580,8 +674,20 @@ local function parse_filename(filename)
     if combined:match("ova") or combined:match("oad") or 
        combined:match("special") or combined:match("sp[^a-z]") or
        result.episode == "0" or
-       combined:match("movie") or combined:match("recap") then
+       combined:match("recap") then
         result.is_special = true
+    end
+    
+    -- HOTFIX: MOVIE DETECTION (enhanced)
+    local movie_keywords = {"movie", "gekijouban", "the movie", "film"}
+    local title_lower = (result.title or ""):lower()
+    for _, keyword in ipairs(movie_keywords) do
+        if title_lower:match(keyword) then
+            result.is_movie = true
+            result.is_special = true
+            debug_log("Detected as MOVIE")
+            break
+        end
     end
     
     -- QUALITY DETECTION (basic)
@@ -598,8 +704,13 @@ local function parse_filename(filename)
     end
     
     if not result.episode then
-        result.episode = "1"  -- Default
-        result.confidence = "failed"
+        if result.is_movie then
+            result.episode = "1"  -- Movies are episode 1
+            debug_log("Movie detected - setting episode to 1")
+        else
+            result.episode = "1"  -- Default
+            result.confidence = "failed"
+        end
     end
     
     -- Validate episode number
@@ -613,12 +724,13 @@ local function parse_filename(filename)
         debug_log(string.format("WARNING: Season number %d outside reasonable range", result.season), true)
     end
     
-    debug_log(string.format("RESULT: Title='%s' | S=%s | E=%s | Confidence=%s | Special=%s",
+    debug_log(string.format("RESULT: Title='%s' | S=%s | E=%s | Confidence=%s | Special=%s | Movie=%s",
         result.title,
         result.season or "nil",
         result.episode,
         result.confidence,
-        result.is_special and "yes" or "no"))
+        result.is_special and "yes" or "no",
+        result.is_movie and "yes" or "no"))
     
     return result
 end
