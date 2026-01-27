@@ -98,24 +98,50 @@ local function ensure_subtitle_cache()
     end
 end
 
--- Calculate cumulative episode number for Jimaku (which uses continuous numbering)
-local function calculate_jimaku_episode(season_num, episode_num, seasons_data)
+-------------------------------------------------------------------------------
+-- CUMULATIVE EPISODE CALCULATION (FIXED)
+-- FIX #9: Better fallback handling with confidence tracking
+-------------------------------------------------------------------------------
+
+-- Calculate cumulative episode number with confidence tracking
+local function calculate_jimaku_episode_safe(season_num, episode_num, seasons_data)
     if not season_num or season_num == 1 then
-        return episode_num
+        return episode_num, "certain"
     end
     
     -- Calculate cumulative episodes from previous seasons
     local cumulative = 0
+    local confidence = "certain"
+    
     for season_idx = 1, season_num - 1 do
         if seasons_data and seasons_data[season_idx] then
             cumulative = cumulative + seasons_data[season_idx].eps
+            debug_log(string.format("  S%d has %d episodes (from AniList)", 
+                season_idx, seasons_data[season_idx].eps))
         else
-            -- Fallback: assume standard 13-episode season if data unavailable
+            -- Fallback: assume standard 13-episode season
             cumulative = cumulative + 13
+            confidence = "uncertain"
+            debug_log(string.format("  S%d episode count UNKNOWN - assuming 13 (UNCERTAIN)", 
+                season_idx), true)
         end
     end
     
-    return cumulative + episode_num
+    local jimaku_ep = cumulative + episode_num
+    
+    if confidence == "uncertain" then
+        debug_log(string.format("WARNING: Cumulative calculation used fallback assumptions. Result may be incorrect!"), true)
+        debug_log(string.format("  Calculated: S%dE%d -> Jimaku Episode %d (UNCERTAIN)", 
+            season_num, episode_num, jimaku_ep), true)
+    end
+    
+    return jimaku_ep, confidence
+end
+
+-- Wrapper for backwards compatibility (without confidence tracking)
+local function calculate_jimaku_episode(season_num, episode_num, seasons_data)
+    local result, _ = calculate_jimaku_episode_safe(season_num, episode_num, seasons_data)
+    return result
 end
 
 -- Reverse: Convert Jimaku cumulative episode to AniList season episode
@@ -148,6 +174,11 @@ local function normalize_digits(s)
     return s
 end
 
+-------------------------------------------------------------------------------
+-- JIMAKU SUBTITLE FILENAME PARSER
+-- FIX #1: Improved pattern ordering and boundary checking
+-------------------------------------------------------------------------------
+
 -- Parse Jimaku subtitle filename to extract episode number(s)
 local function parse_jimaku_filename(filename)
     if not filename then return nil, nil end
@@ -155,24 +186,30 @@ local function parse_jimaku_filename(filename)
     -- Normalize full-width digits
     filename = normalize_digits(filename)
     
-    -- Pattern cascade (ordered by reliability)
+    -- Pattern cascade (ordered by specificity - MOST specific first)
     local patterns = {
-        -- SxxExx patterns
-        {"S(%d+)E(%d+)", "season_episode"},
-        {"[Ss](%d+)[Ee](%d+)", "season_episode"},
-        {"S(%d+)%s*%-%s*E(%d+)", "season_episode"},
-        {"Season%s*(%d+)%s*%-%s*(%d+)", "season_episode"},
+        -- SxxExx patterns (MOST SPECIFIC - check first with boundaries)
+        {"[^%w]S(%d+)E(%d+)[^%w]", "season_episode"},  -- Requires non-word boundaries
+        {"^S(%d+)E(%d+)[^%w]", "season_episode"},       -- At start of string
+        {"[^%w]S(%d+)E(%d+)$", "season_episode"},       -- At end of string
+        {"^S(%d+)E(%d+)$", "season_episode"},           -- Entire string
+        {"[Ss](%d+)[%s%._%-]+[Ee](%d+)", "season_episode"}, -- With separator
+        {"Season%s*(%d+)%s*[%-%–—]%s*(%d+)", "season_episode"},
         
-        -- Fractional episodes (13.5)
-        {"%-%s*(%d+%.%d+)", "fractional"},
-        {"%s(%d+%.%d+)", "fractional"},
+        -- Fractional episodes (13.5) - with context checking
+        {"[^%d%.v](%d+%.5)[^%dv]", "fractional"},      -- Only .5 decimals, not version numbers
+        {"%-%s*(%d+%.5)%s", "fractional"},              -- Preceded by dash
+        {"%s(%d+%.5)%s", "fractional"},                 -- Surrounded by spaces
+        {"%-%s*(%d+%.5)$", "fractional"},               -- At end after dash
+        {"%s(%d+%.5)$", "fractional"},                  -- At end after space
         
-        -- EPxx / Exx
-        {"EP(%d+)", "episode"},
-        {"[Ee]p%s*(%d+)", "episode"},
-        {"[Ee](%d+)", "episode"},
+        -- EPxx / Exx (with boundaries to prevent false matches)
+        {"[^%a]EP(%d+)[^%d]", "episode"},               -- EP prefix, not preceded by letter
+        {"[^%a][Ee]p%s*(%d+)[^%d]", "episode"},
+        {"^EP(%d+)", "episode"},                         -- At start
+        {"^[Ee]p%s*(%d+)", "episode"},
         
-        -- Episode keyword
+        -- Episode keyword (explicit)
         {"Episode%s*(%d+)", "episode"},
         
         -- Japanese patterns
@@ -180,28 +217,32 @@ local function parse_jimaku_filename(filename)
         {"第(%d+)[話回]", "episode"},
         {"（(%d+)）", "episode"},
         
-        -- Common patterns
-        {"_(%d+)%.", "episode"},
-        {"%s(%d+)%s+BD%.", "episode"},
-        {"%s(%d+)%s+Web%s", "episode"},
-        {"%-%s*(%d+)%s*[%[(]", "episode"},
-        {"%-%s*(%d+)%s*％", "episode"},
-        {"%s(%d+)%s*%[", "episode"},
+        -- Common contextual patterns (ordered by specificity)
+        {"_(%d+)%.[AaSs]", "episode"},                  -- _01.ass (very specific)
+        {"%s(%d+)%s+BD%.", "episode"},                   -- " 01 BD."
+        {"%s(%d+)%s+[Ww]eb[%s%.]", "episode"},          -- " 01 Web "
+        {"%-%s*(%d+)%s*[%[(]", "episode"},              -- "- 01 ["
+        {"%s(%d+)%s*%[", "episode"},                     -- " 01 ["
         
-        -- Track patterns
+        -- Track patterns (low priority - uncommon)
         {"track(%d+)", "episode"},
         
         -- Underscore patterns
         {"_(%d%d%d)%.[AaSs]", "episode"},
         {"_(%d%d)%.[AaSs]", "episode"},
         
-        -- Dash patterns
-        {"%-%s*(%d+)%.", "episode"},
+        -- Generic dash/space patterns (LOWEST priority)
+        {"%-%s*(%d+)%.", "episode"},                    -- "- 01."
+        {"%s(%d+)%.", "episode"},                        -- " 01."
         
-        -- Pure number
+        -- Last resort: pure number (must be start of filename only)
         {"^(%d+)%.", "episode"},
+        
+        -- Loose E pattern (VERY LOW priority - can cause false positives)
+        {"[Ee](%d+)", "episode"},                        -- Last resort only
     }
     
+    -- Try each pattern in order
     for _, pattern_data in ipairs(patterns) do
         local pattern = pattern_data[1]
         local ptype = pattern_data[2]
@@ -209,19 +250,30 @@ local function parse_jimaku_filename(filename)
         if ptype == "season_episode" then
             local s, e = filename:match(pattern)
             if s and e then
-                return tonumber(s), tonumber(e)
+                local season_num = tonumber(s)
+                local episode_num = tonumber(e)
+                -- Validation: reasonable season/episode ranges
+                if season_num and episode_num and 
+                   season_num >= 1 and season_num <= 20 and
+                   episode_num >= 0 and episode_num <= 999 then
+                    return season_num, episode_num
+                end
             end
         elseif ptype == "fractional" then
             local e = filename:match(pattern)
             if e then
-                return nil, e  -- Return as string for fractional
+                -- Additional validation: not a version number
+                local before = filename:match("([^%s]-)%s*" .. e:gsub("%.", "%%."))
+                if not before or not before:lower():match("v%d*$") then
+                    return nil, e  -- Return as string for fractional
+                end
             end
-        else
+        else  -- Regular episode
             local e = filename:match(pattern)
             if e then
                 local num = tonumber(e)
                 -- Sanity check: episode numbers should be reasonable
-                if num and num > 0 and num < 9999 then
+                if num and num >= 0 and num <= 999 then
                     return nil, num
                 end
             end
@@ -232,75 +284,89 @@ local function parse_jimaku_filename(filename)
 end
 
 -------------------------------------------------------------------------------
--- FILENAME PARSER LOGIC
+-- MAIN FILENAME PARSER
+-- FIX #3: Improved title extraction with validation
 -------------------------------------------------------------------------------
 
--- Helper to extract content inside brackets/parentheses
-local function extract_hash(str)
-    if not str then return "N/A" end
-    -- Keep original intent: prefer hex-like short hashes inside [] or ()
-    local h = str:match("%[([%x]+)%]") or str:match("%(([%x]+)%)")
-    return h or "N/A"
-end
-
--- Extract quality from various formats (safer: require separators)
-local function extract_quality(str)
-    if not str then return nil end
-
-    -- Prefer explicit bracketed/parenthesized forms first
-    local q = str:match("%((%d%d%d%d?p)%)") or str:match("%[(%d%d%d%d?p)%]")
-    if q then return q end
-
-    -- Require non-word separators to avoid matching years or episode numbers
-    q = str:match("[^%w](%d%d%d%d?p)[^%w]") or str:match("[^%w](%d%d%d%dx%d%d%d%d)[^%w]")
-    return q or "unknown"
-end
-
--- Normalize title by removing common patterns
-local function normalize_title(title)
-    if not title then return "" end
-    -- Replace underscores and dots with spaces
-    title = title:gsub("[%._]", " ")
-    -- Clean up multiple spaces
-    title = title:gsub("%s+", " ")
-    title = title:gsub("^%s+", ""):gsub("%s+$", "")
+-- Helper function: Extract title safely with validation
+local function extract_title_safe(content, episode_marker)
+    if not content then return nil end
+    
+    local title = nil
+    
+    -- Method 1: Extract before episode marker (most reliable)
+    if episode_marker then
+        -- Try to find title before the episode marker
+        local patterns = {
+            "^(.-)%s*[%-%–—]%s*" .. episode_marker,  -- "Title - E01"
+            "^(.-)%s+" .. episode_marker,             -- "Title E01"
+            "^(.-)%s*%_%s*" .. episode_marker,       -- "Title_E01"
+        }
+        
+        for _, pattern in ipairs(patterns) do
+            local t = content:match(pattern)
+            if t and t:len() >= 2 then
+                title = t
+                break
+            end
+        end
+    end
+    
+    -- Method 2: Remove common trailing patterns
+    if not title then
+        title = content
+        -- Remove quality tags
+        title = title:gsub("%s*%[?%d%d%d%d?p%]?.*$", "")
+        title = title:gsub("%s*%d%d%d%dx%d%d%d%d.*$", "")
+        -- Remove codec tags
+        title = title:gsub("%s*[xh]26[45].*$", "")
+        title = title:gsub("%s*HEVC.*$", "")
+    end
+    
+    -- Clean up
+    title = title:gsub("[%._]", " ")        -- Dots and underscores to spaces
+    title = title:gsub("%s+", " ")          -- Multiple spaces to single
+    title = title:gsub("^%s+", ""):gsub("%s+$", "")  -- Trim
+    
+    -- Validation: title must be reasonable
+    if not title or title:len() < 2 or title:len() > 200 then
+        return nil
+    end
+    
+    -- Must contain at least one letter (not just numbers)
+    if not title:match("%a") then
+        return nil
+    end
+    
+    -- Don't allow titles that are just numbers and spaces
+    if title:match("^[%d%s]+$") then
+        return nil
+    end
+    
     return title
 end
 
--- Detect if title contains reversed patterns
-local function is_reversed(str)
-    if not str then return false end
-    return str:match("p027") or str:match("p0801") or str:match("%d%d%dE%-%d%dS")
-end
-
--- Reverse string if needed
-local function maybe_reverse(str)
-    if not str then return str end
-    if is_reversed(str) then
-        local chars = {}
-        for i = #str, 1, -1 do
-            table.insert(chars, str:sub(i, i))
+-- Better group name extraction with validation
+local function extract_group_name(content)
+    if not content then return nil end
+    
+    -- Pattern 1: [GroupName] at start (most reliable)
+    local group = content:match("^%[([%w%._%-%s]+)%]")
+    if group and group:len() >= 2 and group:len() <= 50 then
+        -- Validate: group names typically have certain characteristics
+        -- - Often all caps or mixed case
+        -- - Often contain dots, dashes, or are short
+        -- - Usually not more than 3 words
+        local word_count = select(2, group:gsub("%S+", ""))
+        if word_count <= 3 then
+            return group
         end
-        return table.concat(chars)
     end
-    return str
+    
+    return nil
 end
 
--- Clean episode string
-local function clean_episode(episode_str)
-    if not episode_str then return "" end
-    episode_str = episode_str:gsub("^%((.-)%)$", "%1")
-    episode_str = episode_str:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-    return episode_str
-end
-
--- Detect special episodes
-local function is_special(episode_str, content)
-    local combined = (episode_str or "") .. " " .. (content or "")
-    combined = combined:lower()
-    return combined:match("sp") or combined:match("special") or combined:match("ova") or combined:match("ovd")
-end
-
+-- Roman numeral converter (for season detection like "Title II")
 local function roman_to_int(s)
     if not s then return nil end
     local romans = {I = 1, V = 5, X = 10, L = 50, C = 100}
@@ -311,172 +377,251 @@ local function roman_to_int(s)
         if curr then
             res = res + (curr < prev and -curr or curr)
             prev = curr
+        else
+            return nil  -- Invalid roman numeral
         end
     end
     return res > 0 and res or nil
 end
 
+-- Main parsing function with all fixes applied
 local function parse_filename(filename)
-    -- 1. Log original filename immediately for traceability
-    local original_raw = filename
+    if not filename then return nil end
+    
+    -- Log for debugging
     debug_log("-------------------------------------------")
-    debug_log("INPUT FILENAME: " .. tostring(original_raw))
-
-    -- Preprocessing using your existing helper
-    filename = maybe_reverse(filename)
-
-    local title, episode, season, quality
-    local release_group = "unknown"
-
-    -- Strip file extension and path (Handle both / and \ for Windows compatibility)
-    local no_ext = filename:gsub("%.%w%w%w?$", "")
-    local clean_name = no_ext:match("^.+[/\\](.+)$") or no_ext
-
-    -- 2. Extract Release Group [Group Name] (allow dots, dashes, spaces; space optional)
-    local group, rest = clean_name:match("^%[([%w%._%- ]+)%]%s*(.*)$")
-    if group and rest and rest ~= "" then
-        release_group = group
-        content = rest
-    else
-        content = clean_name
+    debug_log("PARSING: " .. filename)
+    
+    -- Normalize digits
+    filename = normalize_digits(filename)
+    
+    -- Initialize result with FIX #8: confidence tracking
+    local result = {
+        title = nil,
+        episode = nil,
+        season = nil,
+        quality = nil,
+        group = nil,
+        is_special = false,
+        confidence = "low"  -- Track parsing confidence
+    }
+    
+    -- Strip file extension and path
+    local clean_name = filename:gsub("%.%w%w%w?%w?$", "")  -- Remove extension
+    clean_name = clean_name:match("([^/\\]+)$") or clean_name  -- Remove path
+    
+    -- FIX #4: Extract release group first with validation
+    result.group = extract_group_name(clean_name)
+    if result.group then
+        -- Remove group tag from content
+        clean_name = clean_name:gsub("^%[[%w%._%-%s]+%]%s*", "")
     end
-
-    -- 3. HEURISTIC CASCADE (High confidence to Low confidence)
-
-    -- Pattern A: Standard SxxExx (require token boundaries where possible)
-    local s, e = content:match("[^%w][Ss](%d+)[%s%._%-]*[Ee](%d+%.?%d*)[^%w]")
+    
+    local content = clean_name
+    
+    -- FIX #1: PATTERN MATCHING (Ordered by specificity)
+    
+    -- Pattern A: SxxExx (HIGHEST confidence)
+    local s, e = content:match("[^%w]S(%d+)[%s%._%-]*E(%d+%.?%d*)[^%w]")
     if not s then
-        s, e = content:match("[Ss](%d+)[%s%._%-]*[Ee](%d+%.?%d*)")
+        s, e = content:match("^S(%d+)[%s%._%-]*E(%d+%.?%d*)") -- At start
     end
-
+    if not s then
+        s, e = content:match("S(%d+)[%s%._%-]*E(%d+%.?%d*)$") -- At end
+    end
+    if not s then
+        s, e = content:match("S(%d+)[%s%._%-]*E(%d+%.?%d*)") -- Anywhere
+    end
+    
     if s and e then
-        season = tonumber(s)
-        episode = e
-        -- Safer title extraction: require separator before SxxExx token
-        title = content:match("^(.-)[%s%._%-]+[Ss]%d+[%s%._%-]*[Ee]%d+") or
-                content:match("^(.-)[%s%._%-]+[Ss]%d+%s*%-")
+        result.season = tonumber(s)
+        result.episode = e
+        result.confidence = "high"
+        -- Extract title before SxxExx
+        result.title = content:match("^(.-)%s*[Ss]%d+[%s%._%-]*[Ee]%d+") or 
+                       content:match("^(.-)%s*%-+%s*[Ss]%d+")
     end
-
-    -- Pattern B: Dash-based episode detection (handles -, –, —)
-    if not episode then
-        local t, ep = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)")
+    
+    -- Pattern B: Explicit "Episode" keyword (HIGH confidence)
+    if not result.episode then
+        local t, ep = content:match("^(.-)%s*[Ee]pisode%s*(%d+%.?%d*)")
         if t and ep then
-            title, episode = t, ep
+            result.title = t
+            result.episode = ep
+            result.confidence = "high"
         end
     end
-
-    -- Pattern C: Explicit Episode Tag (Ep 01, E01, etc.)
-    if not episode then
-        local t, ep = content:match("^(.-)%s*[Ee][Pp]%.?%s*(%d+%.?%d*)")
+    
+    -- Pattern C: EPxx or Exx with good boundaries (MEDIUM-HIGH confidence)
+    if not result.episode then
+        local t, ep = content:match("^(.-)%s*[%-%–—]%s*EP?%s*(%d+%.?%d*)[^%d]")
         if not t then
-            t, ep = content:match("^(.-)%s*[Ee]%.?%s*(%d+%.?%d*)")
+            t, ep = content:match("^(.-)%s*[%-%–—]%s*EP?%s*(%d+%.?%d*)$")
         end
         if t and ep then
-            title, episode = t, ep
+            result.title = t
+            result.episode = ep
+            result.confidence = "medium-high"
         end
     end
-
-    -- Pattern D: Loose Number at end (Title 01)
-    if not episode then
-        local t, ep = content:match("^(.-)%s+(%d+%.?%d*)%s*$")
+    
+    -- Pattern D: Dash with number (MEDIUM confidence)
+    if not result.episode then
+        local t, ep = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)%s*[%[%(%s]")
+        if not t then
+            t, ep = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)$")
+        end
         if t and ep then
-            title, episode = t, ep
-        end
-    end
-
-    -- 4. CLEANUP & SEASON DETECTION
-    if not title then title = content end
-
-    -- Remove trailing dashes, underscores, or dots often left by pattern splits
-    title = title:gsub("[%s%-%_%.]+$", "")
-    title = normalize_title(title)
-
-    -- Detect Season from Roman Numerals (e.g., "Overlord II" -> Season 2)
-    if not season then
-        local roman = title:match("%s([IVXLCDMivxlcdm]+)$")
-        local r_val = roman and roman_to_int(roman) or nil
-        if r_val and r_val <= 20 then
-            season = r_val
-            title = title:gsub("%s" .. roman .. "$", "")
-        end
-    end
-
-    -- Detect Season from Short "S" notation at end (e.g. "Oshi no Ko S3")
-    if not season then
-        local s_num = title:match("[%s%p][Ss](%d+)$")
-        if s_num then
-            season = tonumber(s_num)
-            title = title:gsub("[%s%p][Ss]%d+$", "")
-        end
-    end
-
-    -- Safe loose season detection: only small season numbers and avoid numeric titles
-    if not season then
-        local loose = title:match(" (%d+)$")
-        if loose then
-            local n = tonumber(loose)
-            if n and n >= 1 and n <= 6 then
-                -- Avoid numeric-first titles and fraction-like titles (22/7)
-                if not title:match("^%d") and not title:match("%d/%d") then
-                    season = n
-                    title = title:gsub(" %d+$", "")
-                end
+            local ep_num = tonumber(ep)
+            -- FIX #2: Validate: probably not a year or other number
+            if ep_num and ep_num >= 0 and ep_num <= 999 then
+                result.title = t
+                result.episode = ep
+                result.confidence = "medium"
             end
         end
     end
-
-    -- Detect Season from Keywords (e.g., "2nd Season", "Season 2")
-    if not season then
-        local k_season = title:match("[Ss]eason%s+(%d+)") or title:match("(%d+)[nrdt][sdh]%s+[Ss]eason")
-        if k_season then
-            season = tonumber(k_season)
-            title = title:gsub("%s*%(?%d*[nrdt][sdh]%s+[Ss]eason%)?", "")
-            title = title:gsub("%s*%(?[Ss]eason%s+%d+%)?", "")
+    
+    -- Pattern E: Space with number at end (LOW-MEDIUM confidence)
+    if not result.episode then
+        local t, ep = content:match("^(.-)%s+(%d+%.?%d*)%s*%[")
+        if not t then
+            t, ep = content:match("^(.-)%s+(%d+%.?%d*)$")
+        end
+        if t and ep then
+            local ep_num = tonumber(ep)
+            -- More validation needed for this pattern
+            if ep_num and ep_num >= 1 and ep_num <= 999 and 
+               not t:match("%d$") then  -- Title shouldn't end in number
+                result.title = t
+                result.episode = ep
+                result.confidence = "low-medium"
+            end
         end
     end
-
-    -- Detect Movie
-    if not season then
-        local movie_keywords = {"movie", "gekijouban", "the movie", "film"}
-        local title_lower = title:lower()
-        local is_movie = false
+    
+    -- FIX #3: If we still don't have a title, try safe extraction
+    if not result.title then
+        result.title = extract_title_safe(content, result.episode)
+    end
+    
+    -- Clean up title if we got one
+    if result.title then
+        result.title = result.title:gsub("[%._]", " ")
+        result.title = result.title:gsub("%s+", " ")
+        result.title = result.title:gsub("^%s+", ""):gsub("%s+$", "")
         
-        for _, keyword in ipairs(movie_keywords) do
-            if title_lower:match(keyword) then
-                is_movie = true
+        -- Remove common trailing junk
+        result.title = result.title:gsub("%s*[%-%_%.]+$", "")
+    end
+    
+    -- SEASON DETECTION (if not already found)
+    
+    -- Method 1: Roman numerals (e.g., "Overlord II" -> Season 2)
+    if not result.season and result.title then
+        local roman = result.title:match("%s([IVXLCivxlc]+)$")
+        if roman then
+            local season_num = roman_to_int(roman)
+            if season_num and season_num >= 1 and season_num <= 10 then
+                result.season = season_num
+                result.title = result.title:gsub("%s" .. roman .. "$", "")
+                debug_log(string.format("Detected Season %d from Roman numeral '%s'", season_num, roman))
+            end
+        end
+    end
+    
+    -- Method 2: "S2" suffix (e.g., "Oshi no Ko S3")
+    if not result.season and result.title then
+        local s_num = result.title:match("%s[Ss](%d+)$")
+        if s_num then
+            result.season = tonumber(s_num)
+            result.title = result.title:gsub("%s[Ss]%d+$", "")
+            debug_log(string.format("Detected Season %d from 'S' suffix", result.season))
+        end
+    end
+    
+    -- Method 3: Season keywords
+    if not result.season and result.title then
+        local season_patterns = {
+            "[Ss]eason%s*(%d+)",
+            "(%d+)[nrdt][dht]%s+[Ss]eason",
+        }
+        for _, pattern in ipairs(season_patterns) do
+            local s_num = result.title:match(pattern)
+            if s_num then
+                result.season = tonumber(s_num)
+                -- Remove season marker from title
+                result.title = result.title:gsub("%s*%(?%d*[nrdt][dht]%s+[Ss]eason%)?", "")
+                result.title = result.title:gsub("%s*%(?[Ss]eason%s+%d+%)?", "")
+                debug_log(string.format("Detected Season %d from keyword", result.season))
                 break
             end
         end
-
-        if is_movie then
-            -- Usually movies are treated as "Season 1" or a standalone entry in APIs
-            season = "N/A"
+    end
+    
+    -- Method 4: Trailing number (conservative - only for small numbers)
+    if not result.season and result.title then
+        local trailing = result.title:match("%s(%d+)$")
+        if trailing then
+            local num = tonumber(trailing)
+            -- Very conservative: only 2-6, and avoid numeric titles
+            if num and num >= 2 and num <= 6 and 
+               not result.title:match("^%d") and  -- Title doesn't start with number
+               not result.title:match("%d/%d") then  -- Not a fraction like "22/7"
+                result.season = num
+                result.title = result.title:gsub("%s%d+$", "")
+                debug_log(string.format("Detected Season %d from trailing number (low confidence)", num))
+            end
         end
     end
-
-    -- Final cleanup
-    title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-
-    -- Final cleanup
-    title = title:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
-    episode = episode or "1"
-    quality = extract_quality(content)
-
-    local result = {
-        title = title,
-        season = season,
-        episode = episode,
-        quality = quality or "unknown",
-        is_special = is_special(episode, content),
-        group = release_group
-    }
-
-    debug_log(string.format("PARSE RESULT:\n  Title:   [%s]\n  Season:  %s\n  Episode: %s\n  Group:   %s",
-        result.title, result.season or "N/A", result.episode, result.group))
-
+    
+    -- FIX #6: SPECIAL EPISODE DETECTION (Enhanced)
+    local combined = (result.episode or "") .. " " .. content:lower()
+    if combined:match("ova") or combined:match("oad") or 
+       combined:match("special") or combined:match("sp[^a-z]") or
+       result.episode == "0" or
+       combined:match("movie") or combined:match("recap") then
+        result.is_special = true
+    end
+    
+    -- QUALITY DETECTION (basic)
+    local quality_pattern = content:match("(%d%d%d%d?p)")
+    if quality_pattern then
+        result.quality = quality_pattern
+    end
+    
+    -- FIX #8: FINAL VALIDATION
+    if not result.title or result.title:len() < 2 then
+        debug_log("ERROR: Failed to extract valid title", true)
+        result.title = content  -- Fallback to full content
+        result.confidence = "failed"
+    end
+    
+    if not result.episode then
+        result.episode = "1"  -- Default
+        result.confidence = "failed"
+    end
+    
+    -- Validate episode number
+    local ep_num = tonumber(result.episode)
+    if ep_num and (ep_num < 0 or ep_num > 999) then
+        debug_log(string.format("WARNING: Episode number %d outside reasonable range", ep_num), true)
+    end
+    
+    -- Validate season number
+    if result.season and (result.season < 1 or result.season > 20) then
+        debug_log(string.format("WARNING: Season number %d outside reasonable range", result.season), true)
+    end
+    
+    debug_log(string.format("RESULT: Title='%s' | S=%s | E=%s | Confidence=%s | Special=%s",
+        result.title,
+        result.season or "nil",
+        result.episode,
+        result.confidence,
+        result.is_special and "yes" or "no"))
+    
     return result
 end
-
 
 -------------------------------------------------------------------------------
 -- PARSER TEST MODE
@@ -916,6 +1061,176 @@ local function make_anilist_request(query, variables)
     return data.data
 end
 
+-------------------------------------------------------------------------------
+-- SMART MATCH ALGORITHM (FIXED)
+-- FIX #10: Improved priority system with conflict resolution
+-------------------------------------------------------------------------------
+
+local function smart_match_anilist(results, parsed, episode_num, season_num)
+    local selected = results[1]  -- Default to best search match
+    local actual_episode = episode_num
+    local actual_season = season_num or 1
+    local match_method = "default"
+    local match_confidence = "low"
+    local seasons = {}
+    
+    -- FIX #10: Weight different signals
+    local has_explicit_season = (season_num and season_num >= 2)
+    local has_special_indicator = parsed.is_special
+    
+    -- Priority scoring system:
+    -- Explicit season marker in filename = 10 points (highest trust)
+    -- Special keyword in filename = 5 points
+    -- Episode number exceeds S1 count = 3 points (suggests later season)
+    
+    local explicit_season_weight = has_explicit_season and 10 or 0
+    local special_weight = has_special_indicator and 5 or 0
+    
+    debug_log(string.format("Smart Match Weights: Explicit Season=%d, Special=%d", 
+        explicit_season_weight, special_weight))
+    
+    -- PRIORITY 1: Explicit Season Number (HIGHEST weight)
+    -- If user has S2/S3 in filename, this should override special detection
+    if has_explicit_season then
+        for i, media in ipairs(results) do
+            local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
+            for _, syn in ipairs(media.synonyms or {}) do
+                full_text = full_text .. " " .. syn
+            end
+            
+            local is_match = false
+            local search_pattern = nil
+            
+            if season_num == 2 then
+                search_pattern = "season 2"
+                is_match = full_text:lower():match("season%s*2") or full_text:lower():match("2nd%s+season")
+            elseif season_num == 3 then
+                search_pattern = "season 3"
+                is_match = full_text:lower():match("season%s*3") or full_text:lower():match("3rd%s+season")
+            elseif season_num >= 4 then
+                search_pattern = "season " .. season_num
+                is_match = full_text:lower():match("season%s*" .. season_num)
+            end
+            
+            if is_match then
+                selected = media
+                actual_episode = episode_num
+                actual_season = season_num
+                match_method = "explicit_season"
+                match_confidence = "high"
+                debug_log(string.format("MATCH: Explicit Season %d via '%s' (HIGH CONFIDENCE)", 
+                    season_num, search_pattern))
+                
+                -- Store this season's data
+                seasons[season_num] = {media = media, eps = media.episodes or 13, name = media.title.romaji}
+                
+                return selected, actual_episode, actual_season, seasons, match_method, match_confidence
+            end
+        end
+        
+        -- If we have explicit season but didn't find match, log warning
+        debug_log(string.format("WARNING: S%d specified but no matching season entry found in results", 
+            season_num), true)
+    end
+    
+    -- PRIORITY 2: Special/OVA Format (MEDIUM-HIGH weight)
+    -- Only if no explicit season number, OR if explicit season also has special keyword
+    if has_special_indicator and not has_explicit_season then
+        for i, media in ipairs(results) do
+            if media.format == "SPECIAL" or media.format == "OVA" or media.format == "ONA" then
+                selected = media
+                actual_episode = episode_num
+                actual_season = 1  -- Specials usually don't have seasons
+                match_method = "special_format"
+                match_confidence = "medium-high"
+                debug_log(string.format("MATCH: Special/OVA format '%s' (MEDIUM-HIGH CONFIDENCE)", 
+                    media.format))
+                return selected, actual_episode, actual_season, seasons, match_method, match_confidence
+            end
+        end
+    end
+    
+    -- PRIORITY 3: Cumulative Episode Calculation (MEDIUM weight)
+    -- If episode number exceeds first result's count, try to find correct season
+    if not has_explicit_season and episode_num > (selected.episodes or 0) then
+        debug_log("Episode number exceeds S1 count - attempting cumulative calculation")
+        
+        -- Build season list
+        for i, media in ipairs(results) do
+            if media.format == "TV" and media.episodes then
+                local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
+                for _, syn in ipairs(media.synonyms or {}) do
+                    full_text = full_text .. " " .. syn
+                end
+                
+                -- Season 1 (no season marker)
+                if not seasons[1] and not full_text:lower():match("season") and 
+                   not full_text:lower():match("%dnd") and 
+                   not full_text:lower():match("%drd") and 
+                   not full_text:lower():match("%dth") then
+                    seasons[1] = {media = media, eps = media.episodes, name = media.title.romaji}
+                end
+                
+                -- Season 2
+                if not seasons[2] and (full_text:lower():match("2nd%s+season") or 
+                   full_text:lower():match("season%s*2")) then
+                    seasons[2] = {media = media, eps = media.episodes, name = media.title.romaji}
+                end
+                
+                -- Season 3
+                if not seasons[3] and (full_text:lower():match("3rd%s+season") or 
+                   full_text:lower():match("season%s*3")) then
+                    seasons[3] = {media = media, eps = media.episodes, name = media.title.romaji}
+                end
+            end
+        end
+        
+        -- Calculate which season this episode belongs to
+        local cumulative = 0
+        local found_match = false
+        
+        for season_idx = 1, 3 do
+            if seasons[season_idx] then
+                local season_eps = seasons[season_idx].eps
+                debug_log(string.format("  Season %d: %s (%d eps, range: %d-%d)", 
+                    season_idx, seasons[season_idx].name, season_eps, 
+                    cumulative + 1, cumulative + season_eps))
+                
+                if episode_num <= cumulative + season_eps then
+                    selected = seasons[season_idx].media
+                    actual_episode = episode_num - cumulative
+                    actual_season = season_idx
+                    match_method = "cumulative"
+                    match_confidence = "medium"
+                    found_match = true
+                    debug_log(string.format("MATCH: Cumulative - Ep %d -> S%dE%d of '%s' (MEDIUM CONFIDENCE)", 
+                        episode_num, season_idx, actual_episode, selected.title.romaji))
+                    break
+                end
+                cumulative = cumulative + season_eps
+            end
+        end
+        
+        if found_match then
+            return selected, actual_episode, actual_season, seasons, match_method, match_confidence
+        else
+            debug_log("WARNING: Cumulative calculation failed - episode exceeds all known seasons", true)
+        end
+    end
+    
+    -- FALLBACK: Use default (first result)
+    if season_num then
+        actual_season = season_num
+    end
+    
+    match_method = "default"
+    match_confidence = "low"
+    debug_log("Using default match (first search result) - LOW CONFIDENCE")
+    
+    return selected, actual_episode, actual_season, seasons, match_method, match_confidence
+end
+
+-- Main search function with integrated smart matching
 local function search_anilist()
     local filename = mp.get_property("filename")
     if not filename then return end
@@ -950,7 +1265,6 @@ local function search_anilist()
 
     if data and data.Page and data.Page.media then
         local results = data.Page.media
-        local selected = results[1] -- Start with best search match
         
         debug_log(string.format("Analyzing %d potential matches for '%s' %sE%s...", 
             #results, 
@@ -958,130 +1272,16 @@ local function search_anilist()
             parsed.season and string.format("S%d ", parsed.season) or "",
             parsed.episode))
 
-        -- SMART SELECTION & CUMULATIVE EPISODE LOGIC
+        -- Use improved smart match algorithm (FIX #10)
         local episode_num = tonumber(parsed.episode) or 1
-        local season_num = parsed.season  -- Can be nil for continuous numbering
-        local found_smart_match = false
-        local actual_episode = episode_num
-        local actual_season = 1
-        local seasons = {}  -- Store season data for Jimaku calculation
+        local season_num = parsed.season
         
-        -- Check if this is a special episode based on parsed data
-        local is_special_ep = parsed.is_special
+        local selected, actual_episode, actual_season, seasons, match_method, match_confidence = 
+            smart_match_anilist(results, parsed, episode_num, season_num)
 
-        -- Priority 1: Match SPECIAL/OVA format if detected as special
-        if is_special_ep and not found_smart_match then
-            for i, media in ipairs(results) do
-                if media.format == "SPECIAL" or media.format == "OVA" or media.format == "ONA" then
-                    selected = media
-                    found_smart_match = true
-                    debug_log(string.format("Special Match: Detected %s format for special episode", media.format))
-                    break
-                end
-            end
-        end
-
-        -- Priority 2: Check if parsed season number indicates we should look for a sequel
-        if not found_smart_match and season_num and season_num >= 2 then
-            -- User has S2/S3 in filename - search for matching season entry
-            for i, media in ipairs(results) do
-                local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
-                for _, syn in ipairs(media.synonyms or {}) do
-                    full_text = full_text .. " " .. syn
-                end
-                
-                local is_match = false
-                if season_num == 3 and (full_text:lower():match("season 3") or full_text:lower():match("3rd season")) then
-                    is_match = true
-                elseif season_num == 2 and (full_text:lower():match("season 2") or full_text:lower():match("2nd season")) then
-                    is_match = true
-                end
-                
-                if is_match then
-                    selected = media
-                    found_smart_match = true
-                    actual_episode = episode_num
-                    actual_season = season_num
-                    debug_log(string.format("Smart Match: Matched S%d via parsed season number", season_num))
-                    break
-                end
-            end
-        end
-
-        -- Priority 3: Fallback - If episode number exceeds first result's episode count OR no explicit season, try cumulative calculation
-        if not found_smart_match and (not season_num or episode_num > (selected.episodes or 0)) then
-            -- Build chronological season list by finding season markers
-            
-            -- Find base season (no season marker)
-            for i, media in ipairs(results) do
-                if media.format == "TV" and media.episodes then
-                    local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
-                    for _, syn in ipairs(media.synonyms or {}) do
-                        full_text = full_text .. " " .. syn
-                    end
-                    
-                    if not full_text:lower():match("season") and not full_text:lower():match("%dnd") and not full_text:lower():match("%drd") and not full_text:lower():match("%dth") then
-                        seasons[1] = {media = media, eps = media.episodes, name = media.title.romaji}
-                        break
-                    end
-                end
-            end
-            
-            -- Find Season 2
-            for i, media in ipairs(results) do
-                if media.format == "TV" and media.episodes then
-                    local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
-                    for _, syn in ipairs(media.synonyms or {}) do
-                        full_text = full_text .. " " .. syn
-                    end
-                    if full_text:lower():match("2nd season") or full_text:lower():match("season 2") then
-                        seasons[2] = {media = media, eps = media.episodes, name = media.title.romaji}
-                        break
-                    end
-                end
-            end
-            
-            -- Find Season 3
-            for i, media in ipairs(results) do
-                if media.format == "TV" and media.episodes then
-                    local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
-                    for _, syn in ipairs(media.synonyms or {}) do
-                        full_text = full_text .. " " .. syn
-                    end
-                    if full_text:lower():match("3rd season") or full_text:lower():match("season 3") then
-                        seasons[3] = {media = media, eps = media.episodes, name = media.title.romaji}
-                        break
-                    end
-                end
-            end
-            
-            -- Calculate cumulative episodes
-            local cumulative = 0
-            for season_idx = 1, 3 do
-                if seasons[season_idx] then
-                    local season_eps = seasons[season_idx].eps
-                    debug_log(string.format("  Season %d: %s (%d eps, cumulative: %d-%d)", 
-                        season_idx, seasons[season_idx].name, season_eps, cumulative + 1, cumulative + season_eps))
-                    
-                    if episode_num <= cumulative + season_eps then
-                        selected = seasons[season_idx].media
-                        actual_episode = episode_num - cumulative
-                        actual_season = season_idx
-                        found_smart_match = true
-                        debug_log(string.format("Cumulative Match: Ep %d -> %s (Season %d, Episode %d)", 
-                            episode_num, selected.title.romaji, season_idx, actual_episode))
-                        break
-                    end
-                    cumulative = cumulative + season_eps
-                end
-            end
-        end
+        -- Log match quality
+        debug_log(string.format("Match Method: %s | Confidence: %s", match_method, match_confidence))
         
-        -- If no cumulative match but we have a season number from parsing, use it
-        if not found_smart_match and season_num then
-            actual_season = season_num
-        end
-
         -- Final reporting with Type/Format
         for i, media in ipairs(results) do
             local romaji = media.title.romaji or "N/A"
@@ -1094,13 +1294,21 @@ local function search_anilist()
                 marker, i, media.id, m_format, total_eps, first_syn, romaji))
         end
 
-        mp.osd_message(string.format("AniList Match: %s\nID: %s | S%d E%d\nFormat: %s | Total Eps: %s", 
+        -- Build OSD message with confidence warning
+        local osd_msg = string.format("AniList Match: %s\nID: %s | S%d E%d\nFormat: %s | Total Eps: %s", 
             selected.title.romaji, 
             selected.id,
             actual_season,
             actual_episode,
             selected.format or "TV",
-            selected.episodes or "?"), 5)
+            selected.episodes or "?")
+        
+        -- Add warning for low confidence matches
+        if match_confidence == "low" or match_confidence == "uncertain" then
+            osd_msg = osd_msg .. "\n⚠ Low confidence - verify result"
+        end
+        
+        mp.osd_message(osd_msg, 5)
 
         -- Try to fetch subtitles from Jimaku using smart matching
         local jimaku_entry = search_jimaku_subtitles(selected.id)
