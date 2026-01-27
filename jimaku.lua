@@ -918,22 +918,130 @@ local function fetch_all_episode_files(entry_id)
     return files
 end
 
--- Intelligent episode matching using metadata (fuzzy/lenient approach)
-local function match_episodes_intelligent(files, target_episode, target_season, seasons_data, anime_title)
+-- Extract all possible title variations from AniList entry
+local function extract_title_variations(anilist_entry)
+    local variations = {}
+    
+    -- Add all title forms
+    if anilist_entry.title then
+        if anilist_entry.title.romaji then
+            table.insert(variations, anilist_entry.title.romaji:lower())
+        end
+        if anilist_entry.title.english then
+            table.insert(variations, anilist_entry.title.english:lower())
+        end
+        if anilist_entry.title.native then
+            table.insert(variations, anilist_entry.title.native:lower())
+        end
+    end
+    
+    -- Add synonyms
+    if anilist_entry.synonyms then
+        for _, syn in ipairs(anilist_entry.synonyms) do
+            table.insert(variations, syn:lower())
+        end
+    end
+    
+    -- Extract base title (without season markers)
+    for i = 1, #variations do
+        local title = variations[i]
+        -- Remove season markers to get base title
+        local base = title:gsub("%s*:%s*.*$", "")  -- Remove after colon
+        base = base:gsub("%s*season%s*%d+", "")
+        base = base:gsub("%s*part%s*%d+", "")
+        base = base:gsub("%s*final%s*season", "")
+        base = base:gsub("%s*%d+[nrdt][dht]%s*season", "")
+        
+        if base ~= title and base:len() > 0 then
+            table.insert(variations, base)
+        end
+    end
+    
+    return variations
+end
+
+-- Extract season number from AniList entry (from synonyms/titles)
+local function extract_season_from_anilist(anilist_entry)
+    -- Check synonyms first
+    if anilist_entry.synonyms then
+        for _, syn in ipairs(anilist_entry.synonyms) do
+            local syn_lower = syn:lower()
+            
+            -- "Season X" or "Xth Season"
+            local season_num = syn_lower:match("season%s*(%d+)")
+            if not season_num then
+                season_num = syn_lower:match("(%d+)[nrdt][dht]%s*season")
+            end
+            
+            if season_num then
+                return tonumber(season_num)
+            end
+        end
+    end
+    
+    -- Check romaji title
+    if anilist_entry.title and anilist_entry.title.romaji then
+        local title_lower = anilist_entry.title.romaji:lower()
+        
+        -- Look for season markers
+        local season_num = title_lower:match("season%s*(%d+)")
+        if not season_num then
+            season_num = title_lower:match("(%d+)[nrdt][dht]%s*season")
+        end
+        
+        if season_num then
+            return tonumber(season_num)
+        end
+    end
+    
+    return nil
+end
+
+-- Check if subtitle filename contains any of the title variations
+local function subtitle_matches_title(subtitle_filename, title_variations)
+    local sub_lower = subtitle_filename:lower()
+    
+    for _, variation in ipairs(title_variations) do
+        -- Remove common separators and compare
+        local var_clean = variation:gsub("[%s%-%._:]+", "")
+        local sub_clean = sub_lower:gsub("[%s%-%._:]+", "")
+        
+        if sub_clean:match(var_clean) then
+            return true, variation
+        end
+    end
+    
+    return false, nil
+end
+
+-- ENHANCED: Intelligent episode matching with AniList cross-verification
+local function match_episodes_intelligent(files, target_episode, target_season, seasons_data, anilist_entry)
     if not files or #files == 0 then
         return {}
     end
     
-    debug_log(string.format("Matching files for S%d E%d from %d total files...", 
+    debug_log(string.format("Enhanced matching for S%d E%d from %d files...", 
         target_season or 1, target_episode, #files))
+    
+    -- Extract AniList metadata for verification
+    local title_variations = extract_title_variations(anilist_entry)
+    local anilist_season = extract_season_from_anilist(anilist_entry) or target_season or 1
+    local total_episodes = anilist_entry.episodes or 13
+    
+    debug_log(string.format("AniList metadata: Season=%s, Episodes=%d, Variations=%d",
+        anilist_season or "nil", total_episodes, #title_variations))
+    
+    if #title_variations > 0 then
+        debug_log("Title variations: " .. table.concat(title_variations, ", "))
+    end
     
     local matches = {}
     local all_parsed = {}
     
-    -- Calculate what cumulative episode we're looking for
-    local target_cumulative = calculate_jimaku_episode(target_season, target_episode, seasons_data)
+    -- Calculate target cumulative episode
+    local target_cumulative = calculate_jimaku_episode(target_season or anilist_season, target_episode, seasons_data)
     debug_log(string.format("Target: S%d E%d = Cumulative Episode %d", 
-        target_season or 1, target_episode, target_cumulative))
+        anilist_season, target_episode, target_cumulative))
     
     -- Parse all filenames and build episode map
     for _, file in ipairs(files) do
@@ -943,19 +1051,28 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             local anilist_episode = nil
             local match_type = ""
             local is_match = false
+            local confidence = "low"
             
             -- Convert to number if it's a string
             local ep_num = tonumber(jimaku_episode) or 0
+            
+            -- VERIFICATION STEP 1: Check if subtitle filename matches any title variation
+            local title_match, matched_variation = subtitle_matches_title(file.name, title_variations)
+            
+            if title_match then
+                confidence = "medium"
+            end
             
             -- CASE 1: Jimaku file has explicit season marker (S02E14, S03E48)
             if jimaku_season then
                 -- Try multiple interpretations of season-marked files
                 
                 -- Interpretation 1A: Standard season numbering (S2E03 = Season 2, Episode 3)
-                if jimaku_season == target_season and ep_num == target_episode then
+                if jimaku_season == anilist_season and ep_num == target_episode then
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "direct_season_match"
+                    confidence = title_match and "high" or "medium"
                 end
                 
                 -- Interpretation 1B: Netflix-style absolute numbering in season format
@@ -964,17 +1081,19 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "netflix_absolute_in_season_format"
+                    confidence = title_match and "medium-high" or "low"
                 end
                 
                 -- Interpretation 1C: Season marker but episode is cumulative from that season's start
                 -- (S02E03 means 3rd episode of Season 2, where S2 started at overall episode 14)
-                if not is_match and jimaku_season == target_season then
+                if not is_match and jimaku_season == anilist_season then
                     -- Calculate what cumulative episode this would be
                     local file_cumulative = calculate_jimaku_episode(jimaku_season, ep_num, seasons_data)
                     if file_cumulative == target_cumulative then
                         is_match = true
                         anilist_episode = target_episode
                         match_type = "season_relative_cumulative"
+                        confidence = title_match and "high" or "medium"
                     end
                 end
             
@@ -985,6 +1104,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "cumulative_match"
+                    confidence = title_match and "high" or "medium"
                 end
                 
                 -- Interpretation 2B: It's the within-season episode (E03 = 3rd episode of current season)
@@ -992,17 +1112,38 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "direct_episode_match"
+                    confidence = title_match and "medium-high" or "low-medium"
                 end
                 
                 -- Interpretation 2C: Reverse cumulative conversion
                 -- (File says E14, but maybe it means something else in context)
                 if not is_match then
-                    local converted_ep = convert_jimaku_to_anilist_episode(ep_num, target_season, seasons_data)
+                    local converted_ep = convert_jimaku_to_anilist_episode(ep_num, anilist_season, seasons_data)
                     if converted_ep == target_episode then
                         is_match = true
                         anilist_episode = target_episode
                         match_type = "reverse_cumulative_conversion"
+                        confidence = title_match and "medium" or "low"
                     end
+                end
+            end
+            
+            -- VERIFICATION STEP 2: Adjust confidence based on AniList metadata
+            if is_match then
+                if jimaku_season then
+                    -- If it has a season marker, it should match AniList season
+                    if jimaku_season == anilist_season then
+                        -- Boost confidence
+                        if confidence == "medium" then confidence = "high" end
+                    else
+                        -- Lower confidence if season mismatch
+                        if confidence == "high" then confidence = "medium" end
+                    end
+                end
+                
+                -- Check if episode number is reasonable
+                if ep_num > total_episodes * 2 then
+                    confidence = "low"
                 end
             end
             
@@ -1013,46 +1154,75 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                 jimaku_episode = ep_num,
                 anilist_episode = anilist_episode,
                 match_type = match_type,
+                confidence = confidence,
+                title_match = title_match,
                 is_match = is_match,
                 file = file
             })
             
             -- Add to matches if we found a match
             if is_match then
-                table.insert(matches, file)
-                debug_log(string.format("  ✓ MATCH [%s]: %s", 
-                    match_type, file.name:sub(1, 80)))
+                table.insert(matches, {
+                    file = file,
+                    confidence = confidence,
+                    match_type = match_type
+                })
+                debug_log(string.format("  ✓ MATCH [%s | %s]: %s", 
+                    match_type, confidence, file.name:sub(1, 80)))
             end
         end
     end
     
+    -- Sort matches by confidence (high > medium-high > medium > low-medium > low)
+    local confidence_order = {
+        high = 5,
+        ["medium-high"] = 4,
+        medium = 3,
+        ["low-medium"] = 2,
+        low = 1
+    }
+    
+    table.sort(matches, function(a, b)
+        return (confidence_order[a.confidence] or 0) > (confidence_order[b.confidence] or 0)
+    end)
+    
     -- If no matches found, show what we parsed for debugging
     if #matches == 0 then
         debug_log(string.format("No matches found for S%d E%d (cumulative: %d). Parsed episodes:", 
-            target_season or 1, target_episode, target_cumulative))
+            anilist_season, target_episode, target_cumulative))
         for i = 1, math.min(10, #all_parsed) do
             local p = all_parsed[i]
             local jimaku_display = p.jimaku_season and string.format("S%dE%d", p.jimaku_season, p.jimaku_episode) 
                                    or string.format("E%d", p.jimaku_episode)
             
-            debug_log(string.format("  [%d] %s... → Jimaku: %s, Tried: %s", 
+            debug_log(string.format("  [%d] %s... → Jimaku: %s | Title: %s | Tried: %s", 
                 i, 
                 p.filename:sub(1, 40),
                 jimaku_display,
+                p.title_match and "YES" or "NO",
                 p.match_type ~= "" and p.match_type or "no_patterns_matched"))
         end
         if #all_parsed > 10 then
             debug_log(string.format("  ... and %d more files", #all_parsed - 10))
         end
     else
-        debug_log(string.format("Found %d matching file(s)", #matches))
+        debug_log(string.format("Found %d matching file(s), sorted by confidence:", #matches))
+        for i, m in ipairs(matches) do
+            debug_log(string.format("  [%d] %s: %s", i, m.confidence, m.file.name:sub(1, 70)))
+        end
     end
     
-    return matches
+    -- Return just the files (extract from match objects)
+    local result_files = {}
+    for _, m in ipairs(matches) do
+        table.insert(result_files, m.file)
+    end
+    
+    return result_files
 end
 
 -- Smart subtitle download with intelligent matching
-local function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anime_title)
+local function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anilist_entry)
     -- Fetch all files for this entry
     local all_files = fetch_all_episode_files(entry_id)
     
@@ -1061,8 +1231,8 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
         return false
     end
     
-    -- Match files intelligently
-    local matched_files = match_episodes_intelligent(all_files, target_episode, target_season, seasons_data, anime_title)
+    -- Match files intelligently with AniList cross-verification
+    local matched_files = match_episodes_intelligent(all_files, target_episode, target_season, seasons_data, anilist_entry)
     
     if #matched_files == 0 then
         debug_log(string.format("No subtitle files matched S%d E%d", target_season or 1, target_episode), false)
@@ -1471,7 +1641,7 @@ local function search_anilist()
                 actual_episode, 
                 actual_season,
                 seasons,
-                selected.title.romaji
+                selected  -- Pass full AniList entry for verification
             )
         end
     else
