@@ -258,7 +258,7 @@ handle_menu_num = function(n)
 end
 
 -- Navigation functions
-push_menu = function(title, items, footer, on_left, on_right)
+push_menu = function(title, items, footer, on_left, on_right, selected)
     debug_log("Pushing menu: " .. title)
     if #menu_state.stack == 0 then
         bind_menu_keys()
@@ -266,7 +266,7 @@ push_menu = function(title, items, footer, on_left, on_right)
     table.insert(menu_state.stack, {
         title = title,
         items = items,
-        selected = 1,
+        selected = selected or 1,
         footer = footer,
         on_left = on_left,
         on_right = on_right
@@ -731,20 +731,20 @@ show_info_menu = function()
 end
 
 -- Settings Submenu
-show_settings_menu = function()
+show_settings_menu = function(selected)
     local auto_dl_status = JIMAKU_AUTO_DOWNLOAD and "✓ Enabled" or "✗ Disabled"
     
     local items = {
         {text = "1. Toggle Auto-download", hint = auto_dl_status, action = function()
             JIMAKU_AUTO_DOWNLOAD = not JIMAKU_AUTO_DOWNLOAD
-            pop_menu(); show_settings_menu()  -- Refresh
+            pop_menu(); show_settings_menu(1)  -- Refresh with same selection
         end},
         {text = "2. Max Subtitles: " .. JIMAKU_MAX_SUBS, action = function()
             if JIMAKU_MAX_SUBS == 1 then JIMAKU_MAX_SUBS = 3
             elseif JIMAKU_MAX_SUBS == 3 then JIMAKU_MAX_SUBS = 5
             elseif JIMAKU_MAX_SUBS == 5 then JIMAKU_MAX_SUBS = 10
             else JIMAKU_MAX_SUBS = 1 end
-            pop_menu(); show_settings_menu()  -- Refresh
+            pop_menu(); show_settings_menu(2)  -- Refresh with same selection
         end},
         {text = "3. UI & Accessibility  →", action = show_ui_settings_menu},
         {text = "4. Filters & Priority  →", action = show_filter_settings_menu},
@@ -754,11 +754,12 @@ show_settings_menu = function()
         end},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Settings", items)
+    
+    push_menu("Settings", items, nil, nil, nil, selected)
 end
 
 -- UI Settings Submenu
-show_ui_settings_menu = function()
+show_ui_settings_menu = function(selected)
     local items = {
         {text = "1. Items Per Page: " .. JIMAKU_ITEMS_PER_PAGE, action = function()
             if JIMAKU_ITEMS_PER_PAGE == 4 then JIMAKU_ITEMS_PER_PAGE = 6
@@ -767,7 +768,7 @@ show_ui_settings_menu = function()
             else JIMAKU_ITEMS_PER_PAGE = 4 end
             -- Update current menu state if active
             menu_state.items_per_page = JIMAKU_ITEMS_PER_PAGE
-            pop_menu(); show_ui_settings_menu()
+            pop_menu(); show_ui_settings_menu(1)
         end},
         {text = "2. Menu Timeout: " .. JIMAKU_MENU_TIMEOUT .. "s", action = function()
             if JIMAKU_MENU_TIMEOUT == 15 then JIMAKU_MENU_TIMEOUT = 30
@@ -775,11 +776,11 @@ show_ui_settings_menu = function()
             elseif JIMAKU_MENU_TIMEOUT == 60 then JIMAKU_MENU_TIMEOUT = 0 -- Indefinite?
             else JIMAKU_MENU_TIMEOUT = 15 end
             MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT == 0 and 3600 or JIMAKU_MENU_TIMEOUT
-            pop_menu(); show_ui_settings_menu()
+            pop_menu(); show_ui_settings_menu(2)
         end},
         {text = "3. Initial OSD Messages", hint = INITIAL_OSD_MESSAGES and "✓ Enabled" or "✗ Disabled", action = function()
             INITIAL_OSD_MESSAGES = not INITIAL_OSD_MESSAGES
-            pop_menu(); show_ui_settings_menu()
+            pop_menu(); show_ui_settings_menu(3)
         end},
         {text = "4. Font Size: " .. JIMAKU_FONT_SIZE, action = function()
             if JIMAKU_FONT_SIZE == 16 then JIMAKU_FONT_SIZE = 20
@@ -787,22 +788,22 @@ show_ui_settings_menu = function()
             elseif JIMAKU_FONT_SIZE == 24 then JIMAKU_FONT_SIZE = 28
             elseif JIMAKU_FONT_SIZE == 28 then JIMAKU_FONT_SIZE = 32
             else JIMAKU_FONT_SIZE = 16 end
-            pop_menu(); show_ui_settings_menu()
+            pop_menu(); show_ui_settings_menu(4)
         end},
         {text = "0. Back to Settings", action = pop_menu},
     }
-    push_menu("UI Settings", items)
+    push_menu("UI Settings", items, nil, nil, nil, selected)
 end
 
 -- Filter Settings Submenu
-show_filter_settings_menu = function()
+show_filter_settings_menu = function(selected)
     local signs_status = JIMAKU_HIDE_SIGNS_ONLY and "✓ Hidden" or "✗ Shown"
     local groups_str = table.concat(JIMAKU_PREFERRED_GROUPS, ", ")
     
     local items = {
         {text = "1. Hide Signs Only Subs", hint = signs_status, action = function()
             JIMAKU_HIDE_SIGNS_ONLY = not JIMAKU_HIDE_SIGNS_ONLY
-            pop_menu(); show_filter_settings_menu()
+            pop_menu(); show_filter_settings_menu(1)
         end},
         {text = "2. Preferred Groups", hint = groups_str, action = function()
             mp.osd_message("Enter groups (comma separated) in console", 3)
@@ -811,7 +812,7 @@ show_filter_settings_menu = function()
         end},
         {text = "0. Back to Settings", action = pop_menu},
     }
-    push_menu("Filter Settings", items)
+    push_menu("Filter Settings", items, nil, nil, nil, selected)
 end
 
 -- Cache Submenu
