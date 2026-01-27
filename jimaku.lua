@@ -600,13 +600,12 @@ local function parse_filename(filename)
     
     -- SEASON DETECTION (if not already found)
     
-    -- HOTFIX: Remove "Part X" before season detection
+    -- HOTFIX: Detect "Part X" to prevent false season detection, but KEEP in title
     local part_num = nil
     if result.title then
         part_num = result.title:match("%s+Part%s+(%d+)$")
         if part_num then
-            result.title = result.title:gsub("%s+Part%s+%d+$", "")
-            debug_log(string.format("Removed 'Part %s' from title (not a season marker)", part_num))
+            debug_log(string.format("Detected 'Part %s' in title - will preserve for AniList search", part_num))
         end
     end
     
@@ -1214,14 +1213,19 @@ local function smart_match_anilist(results, parsed, episode_num, season_num)
             local search_pattern = nil
             
             if season_num == 2 then
-                search_pattern = "season 2"
-                is_match = full_text:lower():match("season%s*2") or full_text:lower():match("2nd%s+season")
+                search_pattern = "season/part 2"
+                is_match = full_text:lower():match("season%s*2") or 
+                          full_text:lower():match("2nd%s+season") or
+                          full_text:lower():match("part%s*2")
             elseif season_num == 3 then
-                search_pattern = "season 3"
-                is_match = full_text:lower():match("season%s*3") or full_text:lower():match("3rd%s+season")
+                search_pattern = "season/part 3"
+                is_match = full_text:lower():match("season%s*3") or 
+                          full_text:lower():match("3rd%s+season") or
+                          full_text:lower():match("part%s*3")
             elseif season_num >= 4 then
-                search_pattern = "season " .. season_num
-                is_match = full_text:lower():match("season%s*" .. season_num)
+                search_pattern = "season/part " .. season_num
+                is_match = full_text:lower():match("season%s*" .. season_num) or
+                          full_text:lower():match("part%s*" .. season_num)
             end
             
             if is_match then
@@ -1243,6 +1247,40 @@ local function smart_match_anilist(results, parsed, episode_num, season_num)
         -- If we have explicit season but didn't find match, log warning
         debug_log(string.format("WARNING: S%d specified but no matching season entry found in results", 
             season_num), true)
+    end
+    
+    -- PRIORITY 1.5: "Part 2"/"Part 3" detection (HIGH weight)
+    -- Check if filename has "Part X" and match it with AniList entries
+    if not has_explicit_season then
+        local part_num = parsed.title:match("%s+Part%s+(%d+)$")
+        if part_num then
+            local part_int = tonumber(part_num)
+            debug_log(string.format("Searching for 'Part %d' in results...", part_int))
+            
+            for i, media in ipairs(results) do
+                local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
+                for _, syn in ipairs(media.synonyms or {}) do
+                    full_text = full_text .. " " .. syn
+                end
+                
+                -- Check if this entry has "Part X" in title
+                if full_text:lower():match("part%s*" .. part_int) then
+                    selected = media
+                    actual_episode = episode_num
+                    actual_season = part_int  -- Treat Part as season for jimaku
+                    match_method = "part_match"
+                    match_confidence = "high"
+                    debug_log(string.format("MATCH: Found 'Part %d' entry (HIGH CONFIDENCE)", part_int))
+                    
+                    -- Store as season for cumulative calculation
+                    seasons[part_int] = {media = media, eps = media.episodes or 13, name = media.title.romaji}
+                    
+                    return selected, actual_episode, actual_season, seasons, match_method, match_confidence
+                end
+            end
+            
+            debug_log(string.format("WARNING: Part %d in filename but no matching AniList entry found", part_int), true)
+        end
     end
     
     -- PRIORITY 2: Special/OVA Format (MEDIUM-HIGH weight)
@@ -1275,24 +1313,28 @@ local function smart_match_anilist(results, parsed, episode_num, season_num)
                     full_text = full_text .. " " .. syn
                 end
                 
-                -- Season 1 (no season marker)
+                -- Season/Part 1 (no season/part marker)
                 if not seasons[1] and not full_text:lower():match("season") and 
+                   not full_text:lower():match("part") and
                    not full_text:lower():match("%dnd") and 
                    not full_text:lower():match("%drd") and 
                    not full_text:lower():match("%dth") then
                     seasons[1] = {media = media, eps = media.episodes, name = media.title.romaji}
                 end
                 
-                -- Season 2
+                -- Season/Part 2
                 if not seasons[2] and (full_text:lower():match("2nd%s+season") or 
-                   full_text:lower():match("season%s*2")) then
+                   full_text:lower():match("season%s*2") or
+                   full_text:lower():match("part%s*2")) then
                     seasons[2] = {media = media, eps = media.episodes, name = media.title.romaji}
                 end
                 
-                -- Season 3
+                -- Season/Part 3
                 if not seasons[3] and (full_text:lower():match("3rd%s+season") or 
-                   full_text:lower():match("season%s*3")) then
+                   full_text:lower():match("season%s*3") or
+                   full_text:lower():match("part%s*3")) then
                     seasons[3] = {media = media, eps = media.episodes, name = media.title.romaji}
+                end
                 end
             end
         end
