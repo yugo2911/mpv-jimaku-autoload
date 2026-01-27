@@ -1227,11 +1227,13 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     
     -- Sort matches by confidence (high > medium-high > medium > low-medium > low)
     local confidence_order = {
+        ["very-high"] = 6,
         high = 5,
         ["medium-high"] = 4,
         medium = 3,
         ["low-medium"] = 2,
-        low = 1
+        low = 1,
+        ["very-low"] = 0
     }
     
     table.sort(matches, function(a, b)
@@ -1449,10 +1451,61 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
         return false
     end
     
+    -- NEW: Filter results by year if available (PRIORITY 0.5 - before season checks)
+    local year_matched_entry = nil
+    if file_year then
+        debug_log(string.format("Filtering results by year: %d", file_year))
+        
+        -- Try to find entry matching the year
+        for i, media in ipairs(results) do
+            -- Check startDate year
+            if media.startDate and media.startDate.year then
+                if media.startDate.year == file_year then
+                    debug_log(string.format("Found year match: %s (%d)", 
+                        media.title.romaji, media.startDate.year))
+                    year_matched_entry = media
+                    
+                    -- If no explicit season in filename, prefer year match
+                    if not has_explicit_season then
+                        selected = media
+                        match_method = "year_match"
+                        match_confidence = "high"
+                        
+                        -- Detect season from this entry
+                        local detected_season = extract_season_from_anilist(selected)
+                        if detected_season then
+                            actual_season = detected_season
+                            debug_log(string.format("Year-matched entry is Season %d", detected_season))
+                        end
+                    end
+                    break
+                end
+            end
+        end
+        
+        -- If year match found but we have explicit season, validate they align
+        if year_matched_entry and has_explicit_season then
+            local year_entry_season = extract_season_from_anilist(year_matched_entry)
+            if year_entry_season and year_entry_season == season_num then
+                selected = year_matched_entry
+                match_method = "year_and_season_match"
+                match_confidence = "very-high"
+                debug_log(string.format("Perfect match: Year %d and Season %d both match!", 
+                    file_year, season_num))
+            end
+        end
+    end
+    
     -- If first result seems completely unrelated, log warning
-    if not check_title_similarity(selected) then
+    if match_method ~= "year_match" and match_method ~= "year_and_season_match" and 
+       not check_title_similarity(selected) then
         debug_log("WARNING: First result may not match - titles seem unrelated", true)
         match_confidence = "very-low"
+    end
+    
+    -- Skip other priority checks if we already found perfect match
+    if match_method == "year_and_season_match" then
+        return selected, actual_episode, actual_season, seasons, match_method, match_confidence
     end
     
     debug_log(string.format("Smart Match Weights: Explicit Season=%d, Special=%d", 
@@ -1715,6 +1768,11 @@ local function search_anilist()
           status
           episodes
           format
+          startDate {
+            year
+            month
+            day
+          }
         }
       }
     }
@@ -1794,10 +1852,11 @@ local function search_anilist()
             local total_eps = media.episodes or "??"
             local m_format = media.format or "UNK"
             local first_syn = (media.synonyms and media.synonyms[1]) or "None"
+            local year = (media.startDate and media.startDate.year) or "????"
             local marker = (media.id == selected.id) and ">>" or "  "
             
-            debug_log(string.format("%s [%d] ID: %-7s | %-7s | Eps: %-3s | Syn: %-15s | %s", 
-                marker, i, media.id, m_format, total_eps, first_syn, romaji))
+            debug_log(string.format("%s [%d] ID: %-7s | %-7s | Year: %4s | Eps: %-3s | Syn: %-15s | %s", 
+                marker, i, media.id, m_format, year, total_eps, first_syn, romaji))
         end
 
         -- Build OSD message with confidence warning
@@ -1809,8 +1868,10 @@ local function search_anilist()
             selected.format or "TV",
             selected.episodes or "?")
         
-        -- Add warning for low confidence matches
-        if match_confidence == "very-low" then
+        -- Add confidence indicator
+        if match_confidence == "very-high" then
+            osd_msg = osd_msg .. "\n✓✓ Perfect match (year + season)"
+        elseif match_confidence == "very-low" then
             osd_msg = osd_msg .. "\n⚠⚠ VERY LOW CONFIDENCE - Likely WRONG match!"
         elseif match_confidence == "low" or match_confidence == "uncertain" then
             osd_msg = osd_msg .. "\n⚠ Low confidence - verify result"
