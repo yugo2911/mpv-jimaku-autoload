@@ -289,7 +289,7 @@ end
 -- HOTFIX: Japanese text, version tags, Part detection
 -------------------------------------------------------------------------------
 
--- NEW: Strip Japanese/CJK characters and clean complex titles
+-- NEW: Strip Japanese/CJK/Korean characters and clean complex titles
 local function clean_japanese_text(title)
     if not title then return title end
     
@@ -297,10 +297,17 @@ local function clean_japanese_text(title)
     title = title:gsub("「[^」]*」", "")
     title = title:gsub("『[^』]*』", "")
     
-    -- Remove common Japanese unicode ranges (simplified CJK removal)
-    title = title:gsub("[\227-\233][\128-\191]+", "")
+    -- Remove content in Korean/CJK parentheses (often contains native script)
+    -- Pattern: (한글...), (中文...), etc
+    title = title:gsub("%s*%([\227-\233][\128-\191]+%)%s*", " ")
     
-    -- Remove orphaned parentheses/dashes from Japanese removal
+    -- Remove common Japanese/Korean/Chinese unicode ranges
+    -- Hiragana/Katakana: U+3040-U+30FF
+    -- CJK: U+4E00-U+9FFF
+    -- Hangul: U+AC00-U+D7AF
+    title = title:gsub("[\227-\237][\128-\191]+", "")
+    
+    -- Remove orphaned parentheses/dashes from removal
     title = title:gsub("%s*%(+%s*%-*%s*%)+%s*", " ")
     title = title:gsub("%s*%(-+%)%s*", " ")
     title = title:gsub("%s+%-+%s+%-+%s+", " - ")  -- "- text -" becomes single dash
@@ -627,14 +634,22 @@ local function parse_filename(filename)
     end
     
     -- Method 1: Roman numerals (e.g., "Overlord II" -> Season 2)
+    -- FIXED: Avoid single letter X/V/I which are often part of titles
     if not result.season and result.title then
         local roman = result.title:match("%s([IVXLCivxlc]+)$")
         if roman then
+            -- Only accept if it's actually a valid roman numeral AND reasonable
             local season_num = roman_to_int(roman)
-            if season_num and season_num >= 1 and season_num <= 10 then
-                result.season = season_num
-                result.title = result.title:gsub("%s" .. roman .. "$", "")
-                debug_log(string.format("Detected Season %d from Roman numeral '%s'", season_num, roman))
+            if season_num and season_num >= 2 and season_num <= 10 then
+                -- Additional check: avoid single letters that might be part of title
+                -- "Big X" should NOT be season 10
+                if roman:len() > 1 or (season_num >= 2 and season_num <= 5) then
+                    result.season = season_num
+                    result.title = result.title:gsub("%s" .. roman .. "$", "")
+                    debug_log(string.format("Detected Season %d from Roman numeral '%s'", season_num, roman))
+                else
+                    debug_log(string.format("Skipped single-letter Roman numeral '%s' (likely part of title)", roman))
+                end
             end
         end
     end
@@ -1384,7 +1399,7 @@ end
 -- FIX #10: Improved priority system with conflict resolution
 -------------------------------------------------------------------------------
 
-local function smart_match_anilist(results, parsed, episode_num, season_num)
+local function smart_match_anilist(results, parsed, episode_num, season_num, file_year)
     local selected = results[1]  -- Default to best search match
     local actual_episode = episode_num
     local actual_season = season_num or 1
@@ -1403,6 +1418,42 @@ local function smart_match_anilist(results, parsed, episode_num, season_num)
     
     local explicit_season_weight = has_explicit_season and 10 or 0
     local special_weight = has_special_indicator and 5 or 0
+    
+    -- NEW: Check title similarity to prevent completely wrong matches
+    local function check_title_similarity(media)
+        local search_terms = parsed.title:lower():gsub("[%s%-%._]", "")
+        local romaji = (media.title.romaji or ""):lower():gsub("[%s%-%._]", "")
+        local english = (media.title.english or ""):lower():gsub("[%s%-%._]", "")
+        
+        -- Check if any significant word from search appears in title
+        for word in search_terms:gmatch("%w+") do
+            if word:len() >= 3 then
+                if romaji:match(word) or english:match(word) then
+                    return true
+                end
+            end
+        end
+        
+        -- Check synonyms
+        if media.synonyms then
+            for _, syn in ipairs(media.synonyms) do
+                local syn_clean = syn:lower():gsub("[%s%-%._]", "")
+                for word in search_terms:gmatch("%w+") do
+                    if word:len() >= 3 and syn_clean:match(word) then
+                        return true
+                    end
+                end
+            end
+        end
+        
+        return false
+    end
+    
+    -- If first result seems completely unrelated, log warning
+    if not check_title_similarity(selected) then
+        debug_log("WARNING: First result may not match - titles seem unrelated", true)
+        match_confidence = "very-low"
+    end
     
     debug_log(string.format("Smart Match Weights: Explicit Season=%d, Special=%d", 
         explicit_season_weight, special_weight))
@@ -1590,6 +1641,25 @@ local function smart_match_anilist(results, parsed, episode_num, season_num)
     return selected, actual_episode, actual_season, seasons, match_method, match_confidence
 end
 
+-- Extract year from filename (for disambiguation)
+local function extract_year(filename)
+    if not filename then return nil end
+    
+    -- Look for (2024), (2025), etc.
+    local year = filename:match("%(20(%d%d)%)")
+    if year then
+        return 2000 + tonumber(year)
+    end
+    
+    -- Look for [2024], [2025]
+    year = filename:match("%[20(%d%d)%]")
+    if year then
+        return 2000 + tonumber(year)
+    end
+    
+    return nil
+end
+
 -- Create a clean version of title for AniList search
 local function get_search_title(parsed)
     local search_title = parsed.title
@@ -1651,25 +1721,72 @@ local function search_anilist()
     ]]
 
     local data = make_anilist_request(query, {search = search_title})
+    
+    -- FALLBACK: If no results, try alternative searches
+    if data and data.Page and data.Page.media and #data.Page.media == 0 then
+        debug_log("No results found - trying fallback searches...")
+        
+        -- Fallback 1: Try original title (without cleaning)
+        if search_title ~= parsed.title then
+            debug_log("Fallback 1: Trying original title: " .. parsed.title)
+            data = make_anilist_request(query, {search = parsed.title})
+        end
+        
+        -- Fallback 2: Try removing subtitle/arc name (text after " - ")
+        if data and data.Page and data.Page.media and #data.Page.media == 0 then
+            local base_title = search_title:match("^(.-)%s*%-%s*.+$")
+            if base_title and base_title:len() > 2 then
+                debug_log("Fallback 2: Trying base title without arc: " .. base_title)
+                data = make_anilist_request(query, {search = base_title})
+            end
+        end
+        
+        -- Fallback 3: Try first word only (for complex titles)
+        if data and data.Page and data.Page.media and #data.Page.media == 0 then
+            local first_word = search_title:match("^(%S+)")
+            if first_word and first_word:len() > 3 then
+                debug_log("Fallback 3: Trying first word only: " .. first_word)
+                data = make_anilist_request(query, {search = first_word})
+            end
+        end
+    end
 
     if data and data.Page and data.Page.media then
         local results = data.Page.media
+        
+        -- Extract year from filename for disambiguation
+        local file_year = extract_year(filename)
+        if file_year then
+            debug_log(string.format("Detected year in filename: %d", file_year))
+        end
         
         debug_log(string.format("Analyzing %d potential matches for '%s' %sE%s...", 
             #results, 
             search_title,  -- Use search_title instead of parsed.title
             parsed.season and string.format("S%d ", parsed.season) or "",
             parsed.episode))
+        
+        -- If we have 0 results, show helpful message
+        if #results == 0 then
+            debug_log("FAILURE: No matches found after all fallback attempts", true)
+            mp.osd_message("AniList: No match found.\nTry renaming file or manual search.", 5)
+            return
+        end
 
         -- Use improved smart match algorithm (FIX #10)
         local episode_num = tonumber(parsed.episode) or 1
         local season_num = parsed.season
         
         local selected, actual_episode, actual_season, seasons, match_method, match_confidence = 
-            smart_match_anilist(results, parsed, episode_num, season_num)
+            smart_match_anilist(results, parsed, episode_num, season_num, file_year)
 
         -- Log match quality
         debug_log(string.format("Match Method: %s | Confidence: %s", match_method, match_confidence))
+        
+        -- Warn user if match confidence is very low (wrong show)
+        if match_confidence == "very-low" then
+            mp.osd_message("⚠ WARNING: Match uncertain - result may be wrong anime!\nPress 'A' to retry or rename file.", 8)
+        end
         
         -- Final reporting with Type/Format
         for i, media in ipairs(results) do
@@ -1693,7 +1810,9 @@ local function search_anilist()
             selected.episodes or "?")
         
         -- Add warning for low confidence matches
-        if match_confidence == "low" or match_confidence == "uncertain" then
+        if match_confidence == "very-low" then
+            osd_msg = osd_msg .. "\n⚠⚠ VERY LOW CONFIDENCE - Likely WRONG match!"
+        elseif match_confidence == "low" or match_confidence == "uncertain" then
             osd_msg = osd_msg .. "\n⚠ Low confidence - verify result"
         end
         
