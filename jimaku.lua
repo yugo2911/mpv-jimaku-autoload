@@ -448,7 +448,30 @@ show_subtitle_browser = function()
     -- Fetch files if not cached
     if not menu_state.browser_files then
         mp.osd_message("Fetching subtitle list...", 30)
-        menu_state.browser_files = fetch_all_episode_files(jimaku_id)
+        local files = fetch_all_episode_files(jimaku_id)
+        
+        -- Sort files by Season and Episode
+        if files then
+            table.sort(files, function(a, b)
+                local sa, ea = parse_jimaku_filename(a.name)
+                local sb, eb = parse_jimaku_filename(b.name)
+                
+                -- Handle nil cases (non-numbered files go to bottom)
+                if not ea and not eb then return a.name < b.name end
+                if not ea then return false end
+                if not eb then return true end
+                
+                sa = sa or 1
+                sb = sb or 1
+                
+                if sa ~= sb then
+                    return sa < sb
+                end
+                return ea < eb
+            end)
+        end
+        
+        menu_state.browser_files = files
         mp.osd_message("", 0)
     end
 
@@ -497,9 +520,24 @@ show_subtitle_browser = function()
         
         -- Parse numbering for display
         local s, e = parse_jimaku_filename(file.name)
+        
+        -- Check if it matches currently playing file
+        local is_current_match = false
+        if menu_state.current_match and e == menu_state.current_match.episode then
+            if not s or s == menu_state.current_match.season then
+                is_current_match = true
+            end
+        end
+
         local display_num = ""
-        if s and e then display_num = string.format("[S%02dE%02d] ", s, e)
-        elseif e then display_num = string.format("[E%s] ", tostring(e)) end
+        local style_num = "{\\c&H00D7FF&}" -- Gold
+        local style_highlight = "{\\c&H00FFFF&\\b1}" -- Yellow/Bold for current match
+        
+        if s and e then 
+            display_num = string.format("%s[S%02dE%02d] {\\r}", is_current_match and style_highlight or style_num, s, e)
+        elseif e then 
+            display_num = string.format("%s[E%s] {\\r}", is_current_match and style_highlight or style_num, tostring(e)) 
+        end
         
         local is_loaded = false
         for _, loaded_name in ipairs(menu_state.loaded_subs_files) do
@@ -508,6 +546,7 @@ show_subtitle_browser = function()
         
         local item_text = string.format("%d. %s%s", display_idx, display_num, file.name)
         if is_loaded then item_text = "✓ " .. item_text end
+        if is_current_match then item_text = "→ " .. item_text end
         
         table.insert(items, {
             text = item_text,
