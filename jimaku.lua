@@ -71,7 +71,7 @@ local menu_state = {
     browser_page = 1,
     browser_files = nil,  -- Cached file list
     browser_filter = nil, -- Filter text
-    items_per_page = 8,
+    items_per_page = 4,
     
     -- AniList search results (for manual picker)
     search_results = {},
@@ -88,7 +88,7 @@ local MENU_MAX_DISPLAY = 10  -- Maximum items to show at once
 
 -- Forward declare local functions for correct scoping
 local render_menu_osd, close_menu, push_menu, pop_menu
-local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_select, handle_menu_num
+local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_left, handle_menu_right, handle_menu_select, handle_menu_num
 local debug_log, search_anilist, load_jimaku_api_key, is_archive_file
 local show_main_menu, show_subtitles_menu, show_search_menu
 local show_info_menu, show_settings_menu, show_cache_menu
@@ -113,7 +113,7 @@ close_menu = function()
     
     -- Remove all menu keybindings (primary and alternatives)
     local keys_to_remove = {
-        "menu-up", "menu-down", "menu-select", "menu-close",
+        "menu-up", "menu-down", "menu-left", "menu-right", "menu-select", "menu-close",
         "menu-up-alt", "menu-down-alt", "menu-select-alt", "menu-back-alt", "menu-quit-alt",
         "menu-wheel-up", "menu-wheel-down", "menu-mbtn-left", "menu-mbtn-right",
         "menu-search-slash", "menu-filter-f", "menu-clear-x"
@@ -210,6 +210,22 @@ handle_menu_down = function()
     render_menu_osd()
 end
 
+handle_menu_left = function()
+    if not menu_state.active or #menu_state.stack == 0 then return end
+    local context = menu_state.stack[#menu_state.stack]
+    if context.on_left then
+        context.on_left()
+    end
+end
+
+handle_menu_right = function()
+    if not menu_state.active or #menu_state.stack == 0 then return end
+    local context = menu_state.stack[#menu_state.stack]
+    if context.on_right then
+        context.on_right()
+    end
+end
+
 handle_menu_select = function()
     if not menu_state.active or #menu_state.stack == 0 then return end
     local context = menu_state.stack[#menu_state.stack]
@@ -236,7 +252,7 @@ handle_menu_num = function(n)
 end
 
 -- Navigation functions
-push_menu = function(title, items, footer)
+push_menu = function(title, items, footer, on_left, on_right)
     debug_log("Pushing menu: " .. title)
     if #menu_state.stack == 0 then
         bind_menu_keys()
@@ -245,7 +261,9 @@ push_menu = function(title, items, footer)
         title = title,
         items = items,
         selected = 1,
-        footer = footer
+        footer = footer,
+        on_left = on_left,
+        on_right = on_right
     })
     menu_state.active = true
     render_menu_osd()
@@ -265,6 +283,8 @@ bind_menu_keys = function()
     -- Primary keys
     mp.add_forced_key_binding("UP", "menu-up", handle_menu_up)
     mp.add_forced_key_binding("DOWN", "menu-down", handle_menu_down)
+    mp.add_forced_key_binding("LEFT", "menu-left", handle_menu_left)
+    mp.add_forced_key_binding("RIGHT", "menu-right", handle_menu_right)
     mp.add_forced_key_binding("ENTER", "menu-select", handle_menu_select)
     mp.add_forced_key_binding("ESC", "menu-close", pop_menu)
     
@@ -490,7 +510,7 @@ show_subtitle_browser = function()
     
     local items = {}
     
-    -- Subtitle files (Items 1-8)
+    -- Subtitle files (Items 1-4)
     for i = start_idx, end_idx do
         local file = filtered_files[i]
         local display_idx = i - start_idx + 1
@@ -516,29 +536,33 @@ show_subtitle_browser = function()
         })
     end
     
-    -- Navigation and Actions
-    if page < total_pages then
-        table.insert(items, {text = "9. Next Page →", action = function()
+    table.insert(items, {text = "0. Back", action = pop_menu})
+    
+    -- Pagination callbacks
+    local on_left = function()
+        if page > 1 then
+            menu_state.browser_page = page - 1
+            pop_menu()
+            show_subtitle_browser()
+        end
+    end
+    
+    local on_right = function()
+        if page < total_pages then
             menu_state.browser_page = page + 1
             pop_menu()
             show_subtitle_browser()
-        end})
+        end
     end
-    
-    table.insert(items, {text = "0. Back", action = pop_menu})
     
     -- Footer labels (non-numbered shortcuts)
-    local footer = "[F] Filter / Jump  "
-    if menu_state.browser_filter then
-        footer = footer .. "[X] Clear Filter  "
-    end
-    footer = footer .. "[UP/DOWN/Wheel] Scroll"
+    local footer = "←/→ Page | [F] Filter | [X] Clear | [UP/DOWN] Select"
     
     local title_prefix = menu_state.browser_filter and string.format("FILTERED: '%s' ", menu_state.browser_filter) or ""
     local title = string.format("%sBrowse Jimaku Subs (%d/%d) - Total %d", 
         title_prefix, page, total_pages, #filtered_files)
     
-    push_menu(title, items, footer)
+    push_menu(title, items, footer, on_left, on_right)
 end
 
 -- Search Submenu
@@ -592,21 +616,28 @@ show_search_results_menu = function()
         })
     end
     
-    -- Pagination controls
-    if total_pages > 1 then
-        if page < total_pages then
-            table.insert(items, {text = "9. Next Page →", action = function()
-                menu_state.search_results_page = page + 1
-                pop_menu()
-                show_search_results_menu()
-            end})
+    table.insert(items, {text = "0. Back", action = pop_menu})
+    
+    -- Pagination callbacks
+    local on_left = function()
+        if page > 1 then
+            menu_state.search_results_page = page - 1
+            pop_menu()
+            show_search_results_menu()
         end
     end
     
-    table.insert(items, {text = "0. Back", action = pop_menu})
+    local on_right = function()
+        if page < total_pages then
+            menu_state.search_results_page = page + 1
+            pop_menu()
+            show_search_results_menu()
+        end
+    end
     
     local title = string.format("AniList Results (Page %d/%d)", page, total_pages)
-    push_menu(title, items, "[UP/DOWN/Wheel] Scroll [ENTER/LeftClick] Select")
+    local footer = "←/→ Page | [UP/DOWN] Scroll | [ENTER] Select"
+    push_menu(title, items, footer, on_left, on_right)
 end
 
 -- Select a specific AniList result and re-run subtitle matching
