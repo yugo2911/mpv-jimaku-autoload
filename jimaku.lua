@@ -38,7 +38,14 @@ local LOG_ONLY_ERRORS = false
 -- Jimaku configuration
 local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
 local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
-local JIMAKU_PREFERRED_GROUPS = {"WEBRip", "WEB-DL", "WEB", "Amazon", "AMZN", "Netflix",}   
+local JIMAKU_PREFERRED_GROUPS = {
+    {name = "WEBRip", enabled = true},
+    {name = "WEB-DL", enabled = true},
+    {name = "WEB", enabled = true},
+    {name = "Amazon", enabled = true},
+    {name = "AMZN", enabled = true},
+    {name = "Netflix", enabled = true}
+}
 local JIMAKU_HIDE_SIGNS_ONLY = false
 local JIMAKU_ITEMS_PER_PAGE = 6
 local JIMAKU_MENU_TIMEOUT = 30  -- Auto-close after seconds
@@ -97,7 +104,7 @@ local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_left, handle
 local debug_log, search_anilist, load_jimaku_api_key, is_archive_file
 local show_main_menu, show_subtitles_menu, show_search_menu
 local show_info_menu, show_settings_menu, show_cache_menu
-local show_ui_settings_menu, show_filter_settings_menu
+local show_ui_settings_menu, show_filter_settings_menu, show_preferred_groups_menu
 local show_subtitle_browser, fetch_all_episode_files
 local parse_jimaku_filename, download_selected_subtitle_action
 local show_current_match_info_action, reload_subtitles_action
@@ -798,21 +805,68 @@ end
 -- Filter Settings Submenu
 show_filter_settings_menu = function(selected)
     local signs_status = JIMAKU_HIDE_SIGNS_ONLY and "✓ Hidden" or "✗ Shown"
-    local groups_str = table.concat(JIMAKU_PREFERRED_GROUPS, ", ")
+    local enabled_groups = {}
+    for _, g in ipairs(JIMAKU_PREFERRED_GROUPS) do
+        if g.enabled then table.insert(enabled_groups, g.name) end
+    end
+    local groups_str = #enabled_groups > 0 and table.concat(enabled_groups, ", ") or "None"
     
     local items = {
         {text = "1. Hide Signs Only Subs", hint = signs_status, action = function()
             JIMAKU_HIDE_SIGNS_ONLY = not JIMAKU_HIDE_SIGNS_ONLY
             pop_menu(); show_filter_settings_menu(1)
         end},
-        {text = "2. Preferred Groups", hint = groups_str, action = function()
-            mp.osd_message("Enter groups (comma separated) in console", 3)
-            mp.commandv("script-message-to", "console", "type", "script-message jimaku-set-groups ")
-            pop_menu()
+        {text = "2. Preferred Groups  →", hint = groups_str, action = function()
+            show_preferred_groups_menu()
         end},
         {text = "0. Back to Settings", action = pop_menu},
     }
     push_menu("Filter Settings", items, nil, nil, nil, selected)
+end
+
+-- Preferred Groups Management Submenu
+show_preferred_groups_menu = function(selected)
+    local items = {}
+    for i, group in ipairs(JIMAKU_PREFERRED_GROUPS) do
+        local status = group.enabled and "✓ " or "✗ "
+        table.insert(items, {
+            text = string.format("%d. %s%s", i, status, group.name),
+            action = function()
+                group.enabled = not group.enabled
+                pop_menu(); show_preferred_groups_menu(i)
+            end
+        })
+    end
+    
+    table.insert(items, {text = "9. Add New Group", action = function()
+        mp.osd_message("Enter groups (comma separated) in console", 3)
+        mp.commandv("script-message-to", "console", "type", "script-message jimaku-set-groups ")
+        pop_menu()
+    end})
+    table.insert(items, {text = "0. Back to Filter Settings", action = pop_menu})
+    
+    local on_left = function()
+        local idx = menu_state.stack[#menu_state.stack].selected
+        if idx > 1 and idx <= #JIMAKU_PREFERRED_GROUPS then
+            local temp = JIMAKU_PREFERRED_GROUPS[idx]
+            JIMAKU_PREFERRED_GROUPS[idx] = JIMAKU_PREFERRED_GROUPS[idx-1]
+            JIMAKU_PREFERRED_GROUPS[idx-1] = temp
+            pop_menu(); show_preferred_groups_menu(idx - 1)
+        end
+    end
+    
+    local on_right = function()
+        local idx = menu_state.stack[#menu_state.stack].selected
+        if idx >= 1 and idx < #JIMAKU_PREFERRED_GROUPS then
+            local temp = JIMAKU_PREFERRED_GROUPS[idx]
+            JIMAKU_PREFERRED_GROUPS[idx] = JIMAKU_PREFERRED_GROUPS[idx+1]
+            JIMAKU_PREFERRED_GROUPS[idx+1] = temp
+            pop_menu(); show_preferred_groups_menu(idx + 1)
+        end
+    end
+    
+    local footer = "←/→ Reorder Priority | ENTER Toggle | 0 Back"
+    push_menu("Preferred Groups", items, footer, on_left, on_right, selected)
 end
 
 -- Cache Submenu
@@ -1904,9 +1958,10 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             end
 
             -- Calculate priority score based on preferred groups
-            for _, pref_group in ipairs(JIMAKU_PREFERRED_GROUPS) do
-                if file.name:lower():match(pref_group:lower()) then
-                    priority_score = 10 -- High boost for preferred groups
+            for i, pref_group in ipairs(JIMAKU_PREFERRED_GROUPS) do
+                if pref_group.enabled and file.name:lower():match(pref_group.name:lower()) then
+                    -- Priority boost: Higher in list (smaller index) = higher boost
+                    priority_score = (#JIMAKU_PREFERRED_GROUPS - i + 1) * 2
                     break
                 end
             end
@@ -2805,18 +2860,31 @@ if not STANDALONE_MODE then
     -- Script message for preferred groups
     mp.register_script_message("jimaku-set-groups", function(text)
         if not text or text == "" then return end
-        local groups = {}
+        local new_groups = {}
         for group in string.gmatch(text, "([^,]+)") do
-            -- Trim whitespace
             group = group:gsub("^%s*(.-)%s*$", "%1")
             if group ~= "" then
-                table.insert(groups, group)
+                table.insert(new_groups, {name = group, enabled = true})
             end
         end
-        if #groups > 0 then
-            JIMAKU_PREFERRED_GROUPS = groups
-            debug_log("Updated preferred groups: " .. table.concat(JIMAKU_PREFERRED_GROUPS, ", "))
-            mp.osd_message("Preferred Groups Updated", 3)
+        if #new_groups > 0 then
+            -- Append or replace? Let's append to existing list if not present
+            for _, ng in ipairs(new_groups) do
+                local exists = false
+                for _, eg in ipairs(JIMAKU_PREFERRED_GROUPS) do
+                    if eg.name:lower() == ng.name:lower() then exists = true break end
+                end
+                if not exists then
+                    table.insert(JIMAKU_PREFERRED_GROUPS, ng)
+                end
+            end
+            debug_log("Updated preferred groups list")
+            mp.osd_message("Added groups to list", 3)
+            -- Refresh menu if open
+            if menu_state.active and menu_state.stack[#menu_state.stack].title == "Preferred Groups" then
+                pop_menu()
+                show_preferred_groups_menu()
+            end
         end
     end)
     
