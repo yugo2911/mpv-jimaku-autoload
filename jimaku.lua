@@ -51,35 +51,78 @@ local episode_cache = {}
 
 local menu_state = {
     active = false,
-    level = "main",
-    selected_index = 1,
-    scroll_offset = 0,
+    stack = {},  -- Stack of menu contexts {name, items, selected, scroll_offset}
     timeout_timer = nil,
     
-    -- Data storage
-    current_anilist_results = {},
-    current_jimaku_files = {},
-    current_parsed = {},
-    current_match = {},
-    current_selected_anilist = nil,
-    current_seasons = {},
+    -- Tracked state for menu display
+    current_match = nil,
+    loaded_subs_count = 0,
+    loaded_subs_files = {},  -- Track loaded subtitle filenames
+    jimaku_id = nil,
+    jimaku_entry = nil,
+    anilist_id = nil,
+    parsed_data = nil,
+    seasons_data = {},
     
-    -- User overrides
-    override_episode = nil,
-    override_season = nil,
-    override_anilist_id = nil
+    -- Subtitle browser state
+    browser_page = 1,
+    browser_files = nil,  -- Cached file list
+    items_per_page = 8
 }
 
 -- Menu configuration
 local MENU_TIMEOUT = 30  -- Auto-close after 30 seconds
-local MENU_MAX_ITEMS = 10  -- Items per page for scrolling
+local MENU_MAX_DISPLAY = 10  -- Maximum items to show at once
 
 -------------------------------------------------------------------------------
--- MENU RENDERING
+-- MENU RENDERING & NAVIGATION
 -------------------------------------------------------------------------------
+
+-- Forward declare local functions for correct scoping
+local render_menu_osd, close_menu, push_menu, pop_menu
+local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_select, handle_menu_num
+
+-- Close menu and cleanup
+close_menu = function()
+    if not menu_state.active then return end
+    
+    menu_state.active = false
+    menu_state.stack = {}
+    
+    -- Clear timeout timer
+    if menu_state.timeout_timer then
+        menu_state.timeout_timer:kill()
+        menu_state.timeout_timer = nil
+    end
+    
+    -- Remove all menu keybindings (primary and alternatives)
+    local keys_to_remove = {
+        "menu-up", "menu-down", "menu-select", "menu-close",
+        "menu-up-alt", "menu-down-alt", "menu-select-alt", "menu-back-alt", "menu-quit-alt"
+    }
+    for _, name in ipairs(keys_to_remove) do
+        mp.remove_key_binding(name)
+    end
+    
+    for i = 0, 9 do
+        mp.remove_key_binding("menu-num-" .. i)
+    end
+    
+    -- Clear OSD
+    mp.osd_message("", 0)
+    debug_log("Menu closed")
+end
 
 -- Render menu using ASS (Advanced SubStation) styling
-local function render_menu_osd(title, items, footer)
+render_menu_osd = function()
+    if not menu_state.active or #menu_state.stack == 0 then return end
+    
+    local context = menu_state.stack[#menu_state.stack]
+    local title = context.title
+    local items = context.items
+    local selected = context.selected
+    local footer = context.footer or (#menu_state.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close")
+    
     local ass = mp.get_property_osd("osd-ass-cc/0")
     
     -- Styling
@@ -88,135 +131,149 @@ local function render_menu_osd(title, items, footer)
     local style_normal = "{\\fs20\\c&HFFFFFF&}"  -- Normal, white
     local style_disabled = "{\\fs20\\c&H808080&}"  -- Gray
     local style_footer = "{\\fs18\\c&HCCCCCC&}"  -- Small, light gray
+    local style_dim = "{\\fs16\\c&H888888&}"     -- Dim gray
     
     -- Build menu
     ass = ass .. style_header .. title .. "\\N"
-    ass = ass .. "{\\fs18\\c&H808080&}" .. string.rep("━", 50) .. "\\N"
+    ass = ass .. "{\\fs18\\c&H808080&}" .. string.rep("━", 40) .. "\\N"
     
-    -- Menu items
-    local start_idx = menu_state.scroll_offset + 1
-    local end_idx = math.min(start_idx + MENU_MAX_ITEMS - 1, #items)
-    
-    for i = start_idx, end_idx do
-        local item = items[i]
-        local marker = (i == menu_state.selected_index) and "→ " or "  "
-        local style = (i == menu_state.selected_index) and style_selected or style_normal
+    -- Items
+    for i, item in ipairs(items) do
+        local prefix = (i == selected) and "→ " or "  "
+        local style = (i == selected) and style_selected or style_normal
         
         if item.disabled then
             style = style_disabled
         end
         
-        ass = ass .. style .. marker .. item.text .. "\\N"
-    end
-    
-    -- Scroll indicators
-    if menu_state.scroll_offset > 0 then
-        ass = ass .. style_footer .. "  ↑ More above\\N"
-    end
-    if end_idx < #items then
-        ass = ass .. style_footer .. "  ↓ More below\\N"
+        local text = item.text
+        if item.hint then
+            text = text .. " " .. style_dim .. "(" .. item.hint .. ")" .. style
+        end
+        
+        ass = ass .. style .. prefix .. text .. "\\N"
     end
     
     -- Footer
-    if footer then
-        ass = ass .. "{\\fs18\\c&H808080&}" .. string.rep("━", 50) .. "\\N"
-        ass = ass .. style_footer .. footer .. "\\N"
-    end
+    ass = ass .. "{\\fs18\\c&H808080&}" .. string.rep("━", 40) .. "\\N"
+    ass = ass .. style_footer .. footer .. "\\N"
     
     mp.osd_message(ass, MENU_TIMEOUT)
-end
-
--- Close menu and cleanup
-local function close_menu()
-    if not menu_state.active then return end
     
-    menu_state.active = false
-    
-    -- Clear timeout timer
+    -- Reset timeout
     if menu_state.timeout_timer then
         menu_state.timeout_timer:kill()
-        menu_state.timeout_timer = nil
     end
-    
-    -- Remove all menu keybindings
-    mp.remove_key_binding("menu-close")
-    mp.remove_key_binding("menu-up")
-    mp.remove_key_binding("menu-down")
-    mp.remove_key_binding("menu-select")
-    mp.remove_key_binding("menu-1")
-    mp.remove_key_binding("menu-2")
-    mp.remove_key_binding("menu-3")
-    mp.remove_key_binding("menu-4")
-    mp.remove_key_binding("menu-5")
-    mp.remove_key_binding("menu-back")
-    
-    -- Clear OSD
-    mp.osd_message("", 0)
-    
-    debug_log("Menu closed")
+    menu_state.timeout_timer = mp.add_timeout(MENU_TIMEOUT, close_menu)
 end
 
--------------------------------------------------------------------------------
--- QUICK ACTIONS MENU (Middle-click)
--------------------------------------------------------------------------------
+-- Navigation functions
+-- Key handlers
+handle_menu_up = function()
+    if not menu_state.active or #menu_state.stack == 0 then return end
+    local context = menu_state.stack[#menu_state.stack]
+    context.selected = context.selected - 1
+    if context.selected < 1 then context.selected = #context.items end
+    render_menu_osd()
+end
 
-local function reload_subtitles()
-    close_menu()
+handle_menu_down = function()
+    if not menu_state.active or #menu_state.stack == 0 then return end
+    local context = menu_state.stack[#menu_state.stack]
+    context.selected = context.selected + 1
+    if context.selected > #context.items then context.selected = 1 end
+    render_menu_osd()
+end
+
+handle_menu_select = function()
+    if not menu_state.active or #menu_state.stack == 0 then return end
+    local context = menu_state.stack[#menu_state.stack]
+    local item = context.items[context.selected]
+    if item and item.action and not item.disabled then
+        item.action()
+    end
+end
+
+handle_menu_num = function(n)
+    if not menu_state.active or #menu_state.stack == 0 then return end
+    local context = menu_state.stack[#menu_state.stack]
     
-    if not menu_state.current_match or not menu_state.current_match.jimaku_id then
-        mp.osd_message("No subtitle source available to reload", 3)
+    -- Handle 0 for back/close
+    if n == 0 then
+        pop_menu()
         return
     end
     
-    mp.osd_message("Reloading subtitles...", 2)
-    debug_log("User requested subtitle reload")
+    local item = context.items[n]
+    if item and item.action and not item.disabled then
+        item.action()
+    end
+end
+
+bind_menu_keys = function()
+    -- Primary keys
+    mp.add_forced_key_binding("UP", "menu-up", handle_menu_up)
+    mp.add_forced_key_binding("DOWN", "menu-down", handle_menu_down)
+    mp.add_forced_key_binding("ENTER", "menu-select", handle_menu_select)
+    mp.add_forced_key_binding("ESC", "menu-close", pop_menu)
     
-    -- Clear current subtitles
+    -- Alternative keys (no overlap)
+    mp.add_forced_key_binding("k", "menu-up-alt", handle_menu_up)
+    mp.add_forced_key_binding("j", "menu-down-alt", handle_menu_down)
+    mp.add_forced_key_binding("l", "menu-select-alt", handle_menu_select)
+    mp.add_forced_key_binding("h", "menu-back-alt", pop_menu)
+    mp.add_forced_key_binding("q", "menu-quit-alt", close_menu)
+    
+    for i = 0, 9 do
+        mp.add_forced_key_binding(tostring(i), "menu-num-" .. i, function() handle_menu_num(i) end)
+    end
+end
+
+-- Menu definitions follow...
+
+-------------------------------------------------------------------------------
+-- MENU DEFINITIONS & ACTIONS
+-------------------------------------------------------------------------------
+
+-- Forward declarations
+local show_main_menu, show_subtitles_menu, show_search_menu
+local show_info_menu, show_settings_menu, show_cache_menu
+local show_subtitle_browser
+
+-- Action handler placeholders (will be implemented next)
+local function reload_subtitles_action()
+    mp.osd_message("Reloading...", 2)
+    pop_menu()
+end
+
+local function download_more_action()
+    mp.osd_message("Downloading more...", 2)
+    pop_menu()
+end
+
+local function clear_subs_action()
     mp.command("sub-remove")
-    
-    -- Re-download with current match data
-    download_subtitle_smart(
-        menu_state.current_match.jimaku_id,
-        menu_state.current_match.episode,
-        menu_state.current_match.season,
-        menu_state.current_seasons,
-        menu_state.current_match.anilist_entry
-    )
+    mp.osd_message("✓ Subtitles cleared", 2)
+    pop_menu()
 end
 
-local function download_more_subtitles()
-    close_menu()
-    mp.osd_message("Downloading more subtitles not yet implemented", 3)
-    -- TODO: Implement fetching next batch
-end
-
-local function clear_all_subtitles()
-    close_menu()
-    
-    mp.command("sub-remove")
-    mp.osd_message("✓ Cleared all subtitles", 2)
-    debug_log("User cleared all subtitles")
-end
-
-local function show_current_match_info()
-    close_menu()
-    
-    if not menu_state.current_match or not menu_state.current_match.title then
+-- Show detailed match info
+local function show_current_match_info_action()
+    local m = menu_state.current_match
+    if not m then
         mp.osd_message("No match information available", 3)
         return
     end
     
-    local m = menu_state.current_match
     local info = string.format(
-        "Current Match:\\N" ..
+        "Current Match Info:\\N" ..
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
         "Title: %s\\N" ..
         "AniList ID: %s\\N" ..
         "Season: %s | Episode: %s\\N" ..
         "Format: %s | Episodes: %s\\N" ..
         "Match Method: %s\\N" ..
-        "Confidence: %s\\N" ..
-        "Year: %s",
+        "Confidence: %s",
         m.title or "N/A",
         m.anilist_id or "N/A",
         m.season or "N/A",
@@ -224,157 +281,226 @@ local function show_current_match_info()
         m.format or "N/A",
         m.total_episodes or "?",
         m.match_method or "N/A",
-        m.confidence or "N/A",
-        m.year or "N/A"
+        m.confidence or "N/A"
     )
     
     mp.osd_message(info, 8)
+    pop_menu()
 end
 
-local function show_quick_menu()
-    if menu_state.active then
-        close_menu()
+-- Download a specific subtitle file selected from browser
+local function download_selected_subtitle_action(file)
+    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
+        mp.osd_message("Error: Jimaku API key not set", 3)
         return
     end
     
-    menu_state.active = true
-    menu_state.level = "quick"
-    menu_state.selected_index = 1
+    local subtitle_path = SUBTITLE_CACHE_DIR .. "/" .. file.name
+    mp.osd_message("Downloading selected subtitle...", 30)
     
-    debug_log("Opening quick actions menu")
-    
-    local items = {
-        {text = "1. Reload Subtitles", action = reload_subtitles},
-        {text = "2. Download More Subs (+5)", action = download_more_subtitles, disabled = true},
-        {text = "3. Clear All Subtitles", action = clear_all_subtitles},
-        {text = "4. Show Current Match Info", action = show_current_match_info},
-        {text = "5. Advanced Menu...", action = function() show_main_menu() end, disabled = true}
+    local download_args = {
+        "curl", "-s", "-L", "-o", subtitle_path,
+        "-H", "Authorization: " .. JIMAKU_API_KEY,
+        file.url
     }
     
-    -- Store items for selection
-    menu_state.current_menu_items = items
+    local download_result = mp.command_native({
+        name = "subprocess",
+        playback_only = false,
+        args = download_args
+    })
     
-    render_menu_osd(
-        "Subtitle Quick Actions",
-        items,
-        "1-5: Select | ESC: Close"
-    )
-    
-    -- Bind keys
-    mp.add_forced_key_binding("ESC", "menu-close", close_menu)
-    mp.add_forced_key_binding("UP", "menu-up", function()
-        menu_state.selected_index = math.max(1, menu_state.selected_index - 1)
-        show_quick_menu()
-    end)
-    mp.add_forced_key_binding("DOWN", "menu-down", function()
-        menu_state.selected_index = math.min(#items, menu_state.selected_index + 1)
-        show_quick_menu()
-    end)
-    mp.add_forced_key_binding("ENTER", "menu-select", function()
-        local item = items[menu_state.selected_index]
-        if item and item.action and not item.disabled then
-            item.action()
-        end
-    end)
-    
-    -- Number key shortcuts
-    for i = 1, 5 do
-        mp.add_forced_key_binding(tostring(i), "menu-" .. i, function()
-            if items[i] and items[i].action and not items[i].disabled then
-                items[i].action()
-            end
-        end)
+    if download_result.status == 0 then
+        mp.commandv("sub-add", subtitle_path)
+        mp.osd_message("✓ Loaded: " .. file.name, 4)
+        -- Update state
+        table.insert(menu_state.loaded_subs_files, file.name)
+        menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+        -- Refresh browser to show checkmark
+        pop_menu()
+        show_subtitle_browser()
+    else
+        mp.osd_message("Download failed!", 3)
     end
+end
+
+-- Main Menu
+show_main_menu = function()
+    local items = {
+        {text = "1. Subtitles      →", action = show_subtitles_menu},
+        {text = "2. Search         →", action = show_search_menu},
+        {text = "3. Information    →", action = show_info_menu},
+        {text = "4. Settings       →", action = show_settings_menu},
+        {text = "5. Cache          →", action = show_cache_menu},
+    }
     
-    -- Auto-close timeout
-    menu_state.timeout_timer = mp.add_timeout(MENU_TIMEOUT, close_menu)
+    if #menu_state.stack > 0 then
+        if not menu_state.active then
+            push_menu("Jimaku Subtitle Menu", items)
+        end
+    else
+        push_menu("Jimaku Subtitle Menu", items)
+    end
 end
 
--------------------------------------------------------------------------------
--- MAIN MENU (Right-click)
--------------------------------------------------------------------------------
-
-local function show_anilist_results()
-    close_menu()
-    mp.osd_message("AniList result picker not yet implemented", 3)
-    -- TODO: Implement result picker
+-- Subtitles Submenu
+show_subtitles_menu = function()
+    local items = {
+        {text = "1. Browse All Jimaku Subs  →", action = function()
+            menu_state.browser_page = 1
+            show_subtitle_browser()
+        end},
+        {text = "2. Reload Current Subtitles", action = reload_subtitles_action},
+        {text = "3. Download More (+5)", action = download_more_action},
+        {text = "4. Clear All Loaded", action = clear_subs_action},
+        {text = "0. Back to Main Menu", action = pop_menu},
+    }
+    push_menu("Subtitle Actions", items)
 end
 
-local function show_subtitle_picker()
-    close_menu()
-    mp.osd_message("Manual subtitle picker not yet implemented", 3)
-    -- TODO: Implement subtitle picker
-end
-
-local function show_main_menu()
-    if menu_state.active and menu_state.level == "main" then
-        close_menu()
+-- Subtitle Browser (Paginated)
+show_subtitle_browser = function()
+    local jimaku_id = menu_state.jimaku_id
+    if not jimaku_id then
+        mp.osd_message("No Jimaku ID available. Run search first.", 3)
         return
     end
+
+    -- Fetch files if not cached
+    if not menu_state.browser_files then
+        mp.osd_message("Fetching subtitle list...", 30)
+        menu_state.browser_files = fetch_all_episode_files(jimaku_id)
+        mp.osd_message("", 0)
+    end
+
+    if not menu_state.browser_files or #menu_state.browser_files == 0 then
+        mp.osd_message("No subtitles found on Jimaku", 3)
+        return
+    end
+
+    local files = menu_state.browser_files
+    local page = menu_state.browser_page
+    local per_page = menu_state.items_per_page
+    local total_pages = math.ceil(#files / per_page)
     
-    close_menu()  -- Close any existing menu first
+    local start_idx = (page - 1) * per_page + 1
+    local end_idx = math.min(start_idx + per_page - 1, #files)
     
-    menu_state.active = true
-    menu_state.level = "main"
-    menu_state.selected_index = 1
+    local items = {}
+    for i = start_idx, end_idx do
+        local file = files[i]
+        local idx = i - start_idx + 1
+        
+        -- Parse numbering for display
+        local s, e = parse_jimaku_filename(file.name)
+        local display_num = ""
+        if s and e then display_num = string.format("[S%02dE%02d] ", s, e)
+        elseif e then display_num = string.format("[E%s] ", tostring(e)) end
+        
+        local hint = string.format("%.1f KB", file.size / 1024)
+        local is_loaded = false
+        -- Check if file.name is in loaded_subs_files (simplified check)
+        for _, loaded_name in ipairs(menu_state.loaded_subs_files) do
+            if loaded_name == file.name then is_loaded = true break end
+        end
+        
+        local item_text = string.format("%d. %s%s", idx, display_num, file.name)
+        if is_loaded then item_text = "✓ " .. item_text end
+        
+        table.insert(items, {
+            text = item_text,
+            hint = hint,
+            action = function() download_selected_subtitle_action(file) end
+        })
+    end
     
-    debug_log("Opening main menu")
+    -- Navigation
+    if page < total_pages then
+        table.insert(items, {text = "9. Next Page →", action = function()
+            menu_state.browser_page = page + 1
+            pop_menu()
+            show_subtitle_browser()
+        end})
+    end
     
-    local current_match = "None"
-    if menu_state.current_match and menu_state.current_match.title then
-        current_match = string.format("%s S%sE%s",
-            menu_state.current_match.title,
-            menu_state.current_match.season or "?",
-            menu_state.current_match.episode or "?")
+    table.insert(items, {text = "0. Back", action = pop_menu})
+    
+    local title = string.format("Browse Jimaku Subs (Page %d/%d) - Total %d", 
+        page, total_pages, #files)
+    
+    push_menu(title, items)
+end
+
+-- Search Submenu
+show_search_menu = function()
+    local items = {
+        {text = "1. Re-run AniList Search", action = function() search_anilist(); pop_menu() end},
+        {text = "2. Manual Title Search", action = nil, disabled = true, hint = "Not Implemented"},
+        {text = "0. Back to Main Menu", action = pop_menu},
+    }
+    push_menu("Search & Selection", items)
+end
+
+-- Information Submenu
+show_info_menu = function()
+    local m = menu_state.current_match
+    local match_text = "None"
+    if m then
+        match_text = string.format("%s (ID: %s)", m.title, m.anilist_id)
     end
     
     local items = {
-        {text = "Current: " .. current_match, action = show_current_match_info},
-        {text = "1. Show All AniList Results →", action = show_anilist_results, disabled = true},
-        {text = "2. Manual Subtitle Selection →", action = show_subtitle_picker, disabled = true},
-        {text = "3. Episode Override →", action = nil, disabled = true},
-        {text = "4. Settings →", action = nil, disabled = true},
-        {text = "", action = nil},  -- Separator
-        {text = "R. Re-run Auto Search", action = search_anilist},
+        {text = "Current Match: ", hint = match_text},
+        {text = "1. Show Detailed Match Info", action = show_current_match_info_action},
+        {text = "2. View Log File Path", action = function() 
+            mp.osd_message("Log: " .. LOG_FILE, 5); pop_menu() 
+        end},
+        {text = "0. Back to Main Menu", action = pop_menu},
     }
+    push_menu("Information", items)
+end
+
+-- Settings Submenu
+show_settings_menu = function()
+    local auto_dl_status = JIMAKU_AUTO_DOWNLOAD and "✓ Enabled" or "✗ Disabled"
     
-    menu_state.current_menu_items = items
-    
-    render_menu_osd(
-        "AniList Search & Selection",
-        items,
-        "1-5/R: Select | ESC: Close"
-    )
-    
-    -- Bind keys
-    mp.add_forced_key_binding("ESC", "menu-close", close_menu)
-    mp.add_forced_key_binding("UP", "menu-up", function()
-        menu_state.selected_index = math.max(1, menu_state.selected_index - 1)
-        show_main_menu()
-    end)
-    mp.add_forced_key_binding("DOWN", "menu-down", function()
-        menu_state.selected_index = math.min(#items, menu_state.selected_index + 1)
-        show_main_menu()
-    end)
-    mp.add_forced_key_binding("ENTER", "menu-select", function()
-        local item = items[menu_state.selected_index]
-        if item and item.action and not item.disabled then
-            item.action()
-        end
-    end)
-    
-    -- Number/letter shortcuts
-    mp.add_forced_key_binding("1", "menu-1", function()
-        if items[2] and items[2].action and not items[2].disabled then items[2].action() end
-    end)
-    mp.add_forced_key_binding("2", "menu-2", function()
-        if items[3] and items[3].action and not items[3].disabled then items[3].action() end
-    end)
-    mp.add_forced_key_binding("r", "menu-back", function()
-        if items[7] and items[7].action then items[7].action() end
-    end)
-    
-    menu_state.timeout_timer = mp.add_timeout(MENU_TIMEOUT, close_menu)
+    local items = {
+        {text = "1. Toggle Auto-download", hint = auto_dl_status, action = function()
+            JIMAKU_AUTO_DOWNLOAD = not JIMAKU_AUTO_DOWNLOAD
+            pop_menu(); show_settings_menu()  -- Refresh
+        end},
+        {text = "2. Max Subtitles: " .. JIMAKU_MAX_SUBS, action = function()
+            if JIMAKU_MAX_SUBS == 1 then JIMAKU_MAX_SUBS = 3
+            elseif JIMAKU_MAX_SUBS == 3 then JIMAKU_MAX_SUBS = 5
+            elseif JIMAKU_MAX_SUBS == 5 then JIMAKU_MAX_SUBS = 10
+            else JIMAKU_MAX_SUBS = 1 end
+            pop_menu(); show_settings_menu()  -- Refresh
+        end},
+        {text = "3. Reload API Key", action = function()
+            load_jimaku_api_key()
+            pop_menu()
+        end},
+        {text = "0. Back to Main Menu", action = pop_menu},
+    }
+    push_menu("Settings", items)
+end
+
+-- Cache Submenu
+show_cache_menu = function()
+    local items = {
+        {text = "1. Clear Subtitle Cache", action = function()
+            -- Placeholder: requires OS command to delete files in SUBTITLE_CACHE_DIR
+            mp.osd_message("Clearing subtitle cache...", 2)
+            pop_menu()
+        end},
+        {text = "2. Clear Memory Episode Cache", action = function()
+            episode_cache = {}
+            mp.osd_message("Memory cache cleared", 2)
+            pop_menu()
+        end},
+        {text = "0. Back to Main Menu", action = pop_menu},
+    }
+    push_menu("Cache Management", items)
 end
 
 -- Unified logging function
@@ -1559,13 +1685,11 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     
     -- Sort matches by confidence (high > medium-high > medium > low-medium > low)
     local confidence_order = {
-        ["very-high"] = 6,
         high = 5,
         ["medium-high"] = 4,
         medium = 3,
         ["low-medium"] = 2,
-        low = 1,
-        ["very-low"] = 0
+        low = 1
     }
     
     table.sort(matches, function(a, b)
@@ -1619,9 +1743,6 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
     
     -- Match files intelligently with AniList cross-verification
     local matched_files = match_episodes_intelligent(all_files, target_episode, target_season, seasons_data, anilist_entry)
-    
-    -- Store all files for menu access (subtitle picker)
-    menu_state.current_jimaku_files = all_files
     
     if #matched_files == 0 then
         debug_log(string.format("No subtitle files matched S%d E%d", target_season or 1, target_episode), false)
@@ -1682,10 +1803,30 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
     
     if success_count > 0 then
         mp.osd_message(string.format("✓ Loaded %d subtitle(s)", success_count), 4)
+        -- Update menu state
+        menu_state.loaded_subs_count = menu_state.loaded_subs_count + success_count
+        for i = 1, success_count do
+            table.insert(menu_state.loaded_subs_files, matched_files[i].name)
+        end
         return true
     else
         debug_log("Failed to download any subtitles", true)
         return false
+    end
+end
+
+-- New helper to track currently loaded subtitles from track-list
+local function update_loaded_subs_list()
+    local tracks = mp.get_property_native("track-list")
+    menu_state.loaded_subs_files = {}
+    menu_state.loaded_subs_count = 0
+    for _, track in ipairs(tracks) do
+        if track.type == "sub" and track.external then
+            -- Use filename from path
+            local filename = track.external_filename or track.title or track.id
+            table.insert(menu_state.loaded_subs_files, filename)
+            menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+        end
     end
 end
 
@@ -1786,61 +1927,10 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
         return false
     end
     
-    -- NEW: Filter results by year if available (PRIORITY 0.5 - before season checks)
-    local year_matched_entry = nil
-    if file_year then
-        debug_log(string.format("Filtering results by year: %d", file_year))
-        
-        -- Try to find entry matching the year
-        for i, media in ipairs(results) do
-            -- Check startDate year
-            if media.startDate and media.startDate.year then
-                if media.startDate.year == file_year then
-                    debug_log(string.format("Found year match: %s (%d)", 
-                        media.title.romaji, media.startDate.year))
-                    year_matched_entry = media
-                    
-                    -- If no explicit season in filename, prefer year match
-                    if not has_explicit_season then
-                        selected = media
-                        match_method = "year_match"
-                        match_confidence = "high"
-                        
-                        -- Detect season from this entry
-                        local detected_season = extract_season_from_anilist(selected)
-                        if detected_season then
-                            actual_season = detected_season
-                            debug_log(string.format("Year-matched entry is Season %d", detected_season))
-                        end
-                    end
-                    break
-                end
-            end
-        end
-        
-        -- If year match found but we have explicit season, validate they align
-        if year_matched_entry and has_explicit_season then
-            local year_entry_season = extract_season_from_anilist(year_matched_entry)
-            if year_entry_season and year_entry_season == season_num then
-                selected = year_matched_entry
-                match_method = "year_and_season_match"
-                match_confidence = "very-high"
-                debug_log(string.format("Perfect match: Year %d and Season %d both match!", 
-                    file_year, season_num))
-            end
-        end
-    end
-    
     -- If first result seems completely unrelated, log warning
-    if match_method ~= "year_match" and match_method ~= "year_and_season_match" and 
-       not check_title_similarity(selected) then
+    if not check_title_similarity(selected) then
         debug_log("WARNING: First result may not match - titles seem unrelated", true)
         match_confidence = "very-low"
-    end
-    
-    -- Skip other priority checks if we already found perfect match
-    if match_method == "year_and_season_match" then
-        return selected, actual_episode, actual_season, seasons, match_method, match_confidence
     end
     
     debug_log(string.format("Smart Match Weights: Explicit Season=%d, Special=%d", 
@@ -2103,11 +2193,6 @@ local function search_anilist()
           status
           episodes
           format
-          startDate {
-            year
-            month
-            day
-          }
         }
       }
     }
@@ -2187,11 +2272,10 @@ local function search_anilist()
             local total_eps = media.episodes or "??"
             local m_format = media.format or "UNK"
             local first_syn = (media.synonyms and media.synonyms[1]) or "None"
-            local year = (media.startDate and media.startDate.year) or "????"
             local marker = (media.id == selected.id) and ">>" or "  "
             
-            debug_log(string.format("%s [%d] ID: %-7s | %-7s | Year: %4s | Eps: %-3s | Syn: %-15s | %s", 
-                marker, i, media.id, m_format, year, total_eps, first_syn, romaji))
+            debug_log(string.format("%s [%d] ID: %-7s | %-7s | Eps: %-3s | Syn: %-15s | %s", 
+                marker, i, media.id, m_format, total_eps, first_syn, romaji))
         end
 
         -- Build OSD message with confidence warning
@@ -2203,22 +2287,8 @@ local function search_anilist()
             selected.format or "TV",
             selected.episodes or "?")
         
-        -- Add confidence indicator
-        if match_confidence == "very-high" then
-            osd_msg = osd_msg .. "\n✓✓ Perfect match (year + season)"
-        elseif match_confidence == "very-low" then
-            osd_msg = osd_msg .. "\n⚠⚠ VERY LOW CONFIDENCE - Likely WRONG match!"
-        elseif match_confidence == "low" or match_confidence == "uncertain" then
-            osd_msg = osd_msg .. "\n⚠ Low confidence - verify result"
-        end
-        
-        mp.osd_message(osd_msg, 5)
-        
         -- Store match data for menu system
-        menu_state.current_parsed = parsed
-        menu_state.current_anilist_results = results
-        menu_state.current_selected_anilist = selected
-        menu_state.current_seasons = seasons
+        menu_state.anilist_id = selected.id
         menu_state.current_match = {
             title = selected.title.romaji,
             anilist_id = selected.id,
@@ -2228,16 +2298,28 @@ local function search_anilist()
             total_episodes = selected.episodes,
             match_method = match_method,
             confidence = match_confidence,
-            year = (selected.startDate and selected.startDate.year) or nil,
-            jimaku_id = nil,  -- Will be set if jimaku found
             anilist_entry = selected
         }
+        menu_state.seasons_data = seasons
+        menu_state.parsed_data = parsed
+
+        -- Add warning for low confidence matches
+        if match_confidence == "very-low" then
+            osd_msg = osd_msg .. "\n⚠⚠ VERY LOW CONFIDENCE - Likely WRONG match!"
+        elseif match_confidence == "low" or match_confidence == "uncertain" then
+            osd_msg = osd_msg .. "\n⚠ Low confidence - verify result"
+        end
+        
+        mp.osd_message(osd_msg, 5)
 
         -- Try to fetch subtitles from Jimaku using smart matching
         local jimaku_entry = search_jimaku_subtitles(selected.id)
         if jimaku_entry then
-            -- Store jimaku ID for reload functionality
-            menu_state.current_match.jimaku_id = jimaku_entry.id
+            -- Store jimaku ID for menu system
+            menu_state.jimaku_id = jimaku_entry.id
+            menu_state.jimaku_entry = jimaku_entry
+            -- Force refresh of browser files next time it's opened
+            menu_state.browser_files = nil
             
             download_subtitle_smart(
                 jimaku_entry.id, 
@@ -2253,15 +2335,6 @@ local function search_anilist()
     end
 end
 
--- TEMP TO STOP THE ERROR
-local function show_quick_menu()
-    mp.osd_message("Quick Menu: Not yet implemented", 2)
-end
-
-local function show_main_menu()
-    mp.osd_message("Main Menu: Not yet implemented", 2)
-end
-
 -- Initialize
 if not STANDALONE_MODE then
     -- Create subtitle cache directory
@@ -2273,23 +2346,25 @@ if not STANDALONE_MODE then
     -- Keybind 'A' to trigger the search
     mp.add_key_binding("A", "anilist-search", search_anilist)
     
-    -- Keybind for quick menu (middle mouse button)
-    mp.add_key_binding("MBTN_MID", "quick-menu", show_quick_menu)
-    
-    -- Keybind for main menu (right mouse button)
-    mp.add_key_binding("MBTN_RIGHT", "main-menu", show_main_menu)
-    
+    -- Keyboard triggers for menu system (forced to ensure they stay active)
+    mp.add_forced_key_binding("ctrl+j", "menu-main-ctrl-j", show_main_menu)
+    mp.add_forced_key_binding("alt+a", "menu-main-alt-a", show_main_menu)
     
     -- Auto-download subtitles on file load if enabled
     if JIMAKU_AUTO_DOWNLOAD then
         mp.register_event("file-loaded", function()
+            -- Reset menu state on new file
+            menu_state.current_match = nil
+            menu_state.jimaku_id = nil
+            menu_state.browser_files = nil
+            update_loaded_subs_list()
+            
             -- Small delay to ensure file is ready
             mp.add_timeout(0.5, search_anilist)
         end)
-        debug_log("AniList Script Initialized with auto-download enabled.")
-        debug_log("Keybinds: A=Search | Middle-Click=Quick Menu | Right-Click=Main Menu")
+        debug_log("AniList Script Initialized. Press 'Ctrl+j' or 'Alt+a' for menu.")
     else
-        debug_log("AniList Script Initialized. Press 'A' to search current file.")
-        debug_log("Keybinds: Middle-Click=Quick Menu | Right-Click=Main Menu")
+        mp.register_event("file-loaded", update_loaded_subs_list)
+        debug_log("AniList Script Initialized. Press 'Ctrl+j' or 'Alt+a' for menu.")
     end
 end
