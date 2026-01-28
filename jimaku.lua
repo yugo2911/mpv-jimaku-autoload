@@ -67,8 +67,17 @@ local JIMAKU_FONT_SIZE = 16
 -- Jimaku API key (will be loaded from file)
 local JIMAKU_API_KEY = ""
 
+-- Kitsunekko mirror configuration
+local KITSUNEKKO_MIRROR_PATH = "D:/kitsunekko-mirror/subtitles"  -- Set to local mirror path, e.g., "D:/kitsunekko-mirror/subtitles" or "D:\\kitsunekko-mirror/kitsunekko-mirror/subtitles"
+local KITSUNEKKO_ENABLED = true  -- Enable local kitsunekko mirror support
+local KITSUNEKKO_PREFER_LOCAL = true  -- Prefer local subtitles over Jimaku when available
+
 -- Episode file cache
 local episode_cache = {}
+
+-- Kitsunekko mirror cache (stores parsed metadata)
+local kitsunekko_cache = {}
+local kitsunekko_anilist_index = {}  -- Maps AniList ID to local subtitle directory
 
 -- AniList search cache (persistent)
 local anilist_cache = {}
@@ -869,7 +878,8 @@ show_settings_menu = function(selected)
         end},
         {text = "3. UI & Accessibility  →", action = show_ui_settings_menu},
         {text = "4. Filters & Priority  →", action = show_filter_settings_menu},
-        {text = "5. Reload API Key", action = function()
+        {text = "5. Kitsunekko Mirror  →", action = show_kitsunekko_settings_menu},
+        {text = "6. Reload API Key", action = function()
             load_jimaku_api_key()
             pop_menu()
         end},
@@ -914,6 +924,47 @@ show_ui_settings_menu = function(selected)
         {text = "0. Back to Settings", action = pop_menu},
     }
     push_menu("UI Settings", items, nil, nil, nil, selected)
+end
+
+-- Kitsunekko Mirror Settings Submenu
+show_kitsunekko_settings_menu = function(selected)
+    local enabled_status = KITSUNEKKO_ENABLED and "✓ Enabled" or "✗ Disabled"
+    local prefer_status = KITSUNEKKO_PREFER_LOCAL and "✓ Prefer Local" or "✗ Fallback"
+    local mirror_path = KITSUNEKKO_MIRROR_PATH ~= "" and KITSUNEKKO_MIRROR_PATH or "Not set"
+    local mirror_display = mirror_path:len() > 40 and 
+        "..." .. mirror_path:sub(-37) or mirror_path
+    
+    local items = {
+        {text = "1. Enable Mirror", hint = enabled_status, action = function()
+            KITSUNEKKO_ENABLED = not KITSUNEKKO_ENABLED
+            if KITSUNEKKO_ENABLED then
+                mp.osd_message("Kitsunekko enabled. Set path in jimaku.lua config.", 3)
+            end
+            pop_menu(); show_kitsunekko_settings_menu(1)
+        end},
+        {text = "2. Load Strategy", hint = prefer_status, action = function()
+            KITSUNEKKO_PREFER_LOCAL = not KITSUNEKKO_PREFER_LOCAL
+            pop_menu(); show_kitsunekko_settings_menu(2)
+        end},
+        {text = "3. Mirror Path: " .. mirror_display, action = function()
+            mp.osd_message("Edit KITSUNEKKO_MIRROR_PATH in jimaku.lua config", 3)
+            pop_menu(); show_kitsunekko_settings_menu(3)
+        end},
+        {text = "4. Scan Mirror Now", action = function()
+            mp.osd_message("Scanning mirror...", 2)
+            scan_kitsunekko_mirror()
+            local count = count_table(kitsunekko_anilist_index)
+            mp.osd_message(string.format("✓ Indexed %d anime entries", count), 4)
+            pop_menu(); show_kitsunekko_settings_menu(4)
+        end},
+        {text = "5. Cache Status", action = function()
+            local count = count_table(kitsunekko_anilist_index)
+            mp.osd_message(string.format("Cached: %d entries", count), 3)
+            pop_menu(); show_kitsunekko_settings_menu(5)
+        end},
+        {text = "0. Back to Settings", action = pop_menu},
+    }
+    push_menu("Kitsunekko Mirror", items, nil, nil, nil, selected)
 end
 
 -- Filter Settings Submenu
@@ -2048,6 +2099,388 @@ local function search_jimaku_subtitles(anilist_id)
     return entries[1]
 end
 
+-------------------------------------------------------------------------------
+-- KITSUNEKKO MIRROR SUPPORT
+-------------------------------------------------------------------------------
+
+-- Normalize path separators for the current OS
+local function normalize_path(path)
+    if not path then return path end
+    if package.config:sub(1, 1) == "\\" then
+        -- Windows: convert forward slashes to backslashes
+        return path:gsub("/", "\\")
+    else
+        -- Unix: convert backslashes to forward slashes
+        return path:gsub("\\", "/")
+    end
+end
+
+-- Check if path exists (platform-independent) - works for files and directories
+local function path_exists(path)
+    if not path or path == "" then return false end
+    path = normalize_path(path)
+    
+    -- In mpv environment, use utils.file_info for better reliability
+    if not STANDALONE_MODE then
+        local ok, stat = pcall(function() return utils.file_info(path) end)
+        if ok and stat then return true end
+    end
+    
+    -- Fallback method 1: Try to open as file (works for files and directories in some Lua versions)
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    
+    -- Fallback method 2: On Windows, try to list contents with a dummy pattern
+    -- This is a hack but sometimes it works when io.open doesn't
+    if package.config:sub(1, 1) == "\\" then
+        -- Windows: use os.execute to test with 'dir' command
+        local handle = io.popen('if exist "' .. path .. '" (echo 1) else (echo 0)', 'r')
+        if handle then
+            local result = handle:read("*a")
+            handle:close()
+            return result:match("1") ~= nil
+        end
+    end
+    
+    return false
+end
+
+-- List directory contents with error handling (works in both standalone and mpv modes)
+local function list_directory(path)
+    if not path or path == "" then return nil end
+    
+    -- Try mpv utils first (if available)
+    if not STANDALONE_MODE then
+        local ok, result = pcall(function()
+            if not utils or not utils.readdir then
+                return nil
+            end
+            return utils.readdir(path)
+        end)
+        
+        if ok and result then
+            -- Validate that result is a table
+            if type(result) == "table" then
+                return result
+            end
+        end
+        
+        -- If utils.readdir failed or returned invalid data, log it
+        if not ok then
+            debug_log(string.format("ERROR: utils.readdir() call failed for path: %s", path), true)
+        elseif result == nil then
+            debug_log(string.format("WARNING: utils.readdir() returned nil for path: %s", path))
+        else
+            debug_log(string.format("ERROR: utils.readdir() returned non-table for path: %s (type: %s)", path, type(result)), true)
+        end
+        
+        return nil
+    end
+    
+    -- Fallback: Use Lua io/os for both standalone and when utils fails
+    -- Note: os.execute doesn't return directory structure, so we use a workaround
+    local entries = {}
+    
+    -- Try using os.execute with dir/ls command based on platform
+    local is_windows = package.config:sub(1, 1) == "\\"
+    local cmd
+    
+    if is_windows then
+        -- Windows: use PowerShell to list directories and files
+        cmd = string.format('powershell -Command "Get-ChildItem -Path %q | ForEach-Object { $_.Name; if($_.PSIsContainer) { Write-Host \\\"DIR\\\" } else { Write-Host \\\"FILE\\\" } }"', path)
+    else
+        -- Unix: use ls -1
+        cmd = string.format("ls -1 '%s' 2>/dev/null", path)
+    end
+    
+    -- For now, return nil on fallback (needs more complex implementation)
+    -- A better approach would be to use LuaFileSystem (lfs) if available
+    return nil
+end
+
+-- Parse .kitsuinfo.json file to extract AniList ID and metadata
+local function parse_kitsuinfo(kitsuinfo_path)
+    if not kitsuinfo_path then
+        return nil
+    end
+    
+    -- First check if file exists
+    if not path_exists(kitsuinfo_path) then
+        return nil
+    end
+    
+    local ok, f = pcall(io.open, kitsuinfo_path, "r")
+    if not ok or not f then
+        debug_log(string.format("Failed to open: %s", kitsuinfo_path))
+        return nil
+    end
+    
+    local content = f:read("*a")
+    f:close()
+    
+    if not content or content == "" then
+        debug_log(string.format("Empty kitsuinfo file: %s", kitsuinfo_path))
+        return nil
+    end
+    
+    local parse_ok, data = pcall(function()
+        if STANDALONE_MODE then
+            return nil
+        else
+            return utils.parse_json(content)
+        end
+    end)
+    
+    if not parse_ok then
+        debug_log(string.format("Failed to parse JSON: %s", kitsuinfo_path))
+        return nil
+    end
+    
+    if not data then
+        debug_log(string.format("JSON parse returned nil: %s", kitsuinfo_path))
+        return nil
+    end
+    
+    if not data.anilist_id then
+        debug_log(string.format("No anilist_id in: %s", kitsuinfo_path))
+        return nil
+    end
+    
+    return data
+end
+
+-- Scan kitsunekko mirror directory and build index by AniList ID
+local function scan_kitsunekko_mirror()
+    if not KITSUNEKKO_ENABLED or not KITSUNEKKO_MIRROR_PATH or KITSUNEKKO_MIRROR_PATH == "" then
+        debug_log("Kitsunekko mirror not configured or disabled")
+        return false
+    end
+    
+    local mirror_path = normalize_path(KITSUNEKKO_MIRROR_PATH)
+    
+    if not path_exists(mirror_path) then
+        debug_log("Kitsunekko mirror path not found: " .. mirror_path, true)
+        return false
+    end
+    
+    debug_log("Scanning Kitsunekko mirror: " .. mirror_path)
+    
+    -- Directory structure: subtitles/{anime_tv,anime_movie,drama_tv,drama_movie,unsorted}/{Title}/...
+    local categories = {"anime_tv", "anime_movie", "drama_tv", "drama_movie", "unsorted"}
+    local indexed = 0
+    local invalid_count = 0
+    local failed_list_dirs = {}
+    
+    for _, category in ipairs(categories) do
+        local category_path = mirror_path .. "\\" .. category
+        
+        if path_exists(category_path) then
+            local titles = list_directory(category_path)
+            if titles then
+                -- Validate that titles is actually a table
+                if type(titles) ~= "table" then
+                    debug_log(string.format("ERROR: list_directory returned non-table for %s: %s", category, type(titles)), true)
+                    table.insert(failed_list_dirs, category_path)
+                else
+                    debug_log(string.format("Found %d entries in %s", #titles, category))
+                    
+                    -- Wrap iteration in pcall to catch any iteration errors
+                    local ok, err = pcall(function()
+                        for _, title_entry in ipairs(titles) do
+                            if title_entry and type(title_entry) == "table" and title_entry.is_dir and title_entry.name then
+                                local title_path = category_path .. "\\" .. title_entry.name
+                                local kitsuinfo_path = title_path .. "\\.kitsuinfo.json"
+                                
+                                -- Try to parse kitsuinfo.json
+                                local kitsuinfo = parse_kitsuinfo(kitsuinfo_path)
+                                if kitsuinfo and kitsuinfo.anilist_id then
+                                    local anilist_id = tonumber(kitsuinfo.anilist_id)
+                                    if anilist_id then
+                                        kitsunekko_anilist_index[anilist_id] = title_path
+                                        kitsunekko_cache[anilist_id] = {
+                                            path = title_path,
+                                            category = category,
+                                            kitsuinfo = kitsuinfo,
+                                            timestamp = os.time()
+                                        }
+                                        indexed = indexed + 1
+                                    end
+                                else
+                                    invalid_count = invalid_count + 1
+                                end
+                            end
+                        end
+                    end)
+                    
+                    if not ok then
+                        debug_log(string.format("ERROR: Failed to iterate titles in %s: %s", category, err), true)
+                        table.insert(failed_list_dirs, category_path)
+                    end
+                end
+            else
+                table.insert(failed_list_dirs, category_path)
+                debug_log(string.format("WARNING: Could not list directory: %s", category_path), true)
+            end
+        end
+    end
+    
+    debug_log(string.format("Kitsunekko scan complete: indexed %d entries (skipped %d invalid dirs)", indexed, invalid_count))
+    if #failed_list_dirs > 0 then
+        debug_log(string.format("Failed to list %d category directories - this may block scanning", #failed_list_dirs), true)
+    end
+    return indexed > 0
+end
+
+-- Helper to count table entries
+local function count_table(t)
+    local count = 0
+    for _ in pairs(t) do count = count + 1 end
+    return count
+end
+
+-- Get subtitle files from local kitsunekko mirror for AniList ID
+local function get_kitsunekko_files(anilist_id)
+    if not kitsunekko_anilist_index[anilist_id] then
+        return nil
+    end
+    
+    local title_path = kitsunekko_anilist_index[anilist_id]
+    if not path_exists(title_path) then
+        return nil
+    end
+    
+    debug_log("Fetching Kitsunekko files from: " .. title_path)
+    
+    local files = {}
+    local entries = list_directory(title_path)
+    
+    if not entries or type(entries) ~= "table" then
+        debug_log(string.format("WARNING: Could not list directory %s", title_path), true)
+        return nil
+    end
+    
+    local ok, err = pcall(function()
+        for _, entry in ipairs(entries) do
+            if entry and type(entry) == "table" and not entry.is_dir and entry.name then
+                local name = entry.name
+                -- Only include subtitle files
+                if name:match("%.ass$") or name:match("%.srt$") or name:match("%.sub$") then
+                    table.insert(files, {
+                        name = name,
+                        path = title_path .. "/" .. name,
+                        size = entry.size or 0,
+                        source = "kitsunekko"
+                    })
+                end
+            end
+        end
+    end)
+    
+    if not ok then
+        debug_log(string.format("ERROR: Failed to iterate files in %s: %s", title_path, err), true)
+        return nil
+    end
+    
+    debug_log(string.format("Found %d subtitle files in Kitsunekko for AniList ID %d", 
+        #files, anilist_id))
+    
+    return #files > 0 and files or nil
+end
+
+-- Search kitsunekko mirror by filename/title (offline mode, no AniList ID required)
+local function search_kitsunekko_offline(title_to_match, target_episode)
+    if not KITSUNEKKO_ENABLED or not KITSUNEKKO_MIRROR_PATH or KITSUNEKKO_MIRROR_PATH == "" then
+        return nil
+    end
+    
+    if count_table(kitsunekko_anilist_index) == 0 then
+        scan_kitsunekko_mirror()
+        if count_table(kitsunekko_anilist_index) == 0 then
+            return nil
+        end
+    end
+    
+    debug_log(string.format("Searching Kitsunekko offline for: '%s'", title_to_match))
+    
+    local best_match = nil
+    local best_score = 0
+    
+    for anilist_id, cache_entry in pairs(kitsunekko_cache) do
+        if cache_entry and cache_entry.kitsuinfo then
+            local info = cache_entry.kitsuinfo
+            local local_names = { info.name or "", info.english_name or "", info.japanese_name or "" }
+            
+            for _, local_name in ipairs(local_names) do
+                if local_name ~= "" then
+                    local title_lower = title_to_match:lower()
+                    local name_lower = local_name:lower()
+                    
+                    if title_lower == name_lower then
+                        best_match = cache_entry
+                        best_score = 100
+                        break
+                    end
+                    
+                    if title_lower:find(name_lower) or name_lower:find(title_lower) then
+                        best_score = 50
+                        best_match = cache_entry
+                    end
+                end
+            end
+            
+            if best_score == 100 then break end
+        end
+    end
+    
+    if best_match then
+        debug_log(string.format("Found offline match: %s", best_match.kitsuinfo.name or "Unknown"))
+        return best_match
+    end
+    
+    return nil
+end
+
+-- Get subtitle files directly from directory (for offline matches)
+local function get_kitsunekko_files_from_path(dir_path)
+    if not path_exists(dir_path) then
+        return nil
+    end
+    
+    local files = {}
+    local entries = list_directory(dir_path)
+    
+    if not entries or type(entries) ~= "table" then
+        debug_log(string.format("WARNING: Could not list directory %s", dir_path), true)
+        return nil
+    end
+    
+    local ok, err = pcall(function()
+        for _, entry in ipairs(entries) do
+            if entry and type(entry) == "table" and not entry.is_dir and entry.name then
+                local name = entry.name
+                if name:match("%.ass$") or name:match("%.srt$") or name:match("%.sub$") then
+                    table.insert(files, {
+                        name = name,
+                        path = dir_path .. "/" .. name,
+                        size = entry.size or 0,
+                        source = "kitsunekko_offline"
+                    })
+                end
+            end
+        end
+    end)
+    
+    if not ok then
+        debug_log(string.format("ERROR: Failed to iterate files in %s: %s", dir_path, err), true)
+        return nil
+    end
+    
+    return #files > 0 and files or nil
+end
+
 -- Fetch ALL subtitle files for an entry (no episode filter)
 fetch_all_episode_files = function(entry_id)
     -- Check cache first
@@ -2447,13 +2880,83 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     return result_files
 end
 
+-- Load local kitsunekko subtitles for AniList ID
+local function load_kitsunekko_subtitles(anilist_id, target_episode, target_season, seasons_data, anilist_entry, is_auto)
+    if not KITSUNEKKO_ENABLED then
+        return false
+    end
+    
+    -- Ensure kitsunekko mirror has been scanned
+    if count_table(kitsunekko_anilist_index) == 0 then
+        scan_kitsunekko_mirror()
+    end
+    
+    local all_files = get_kitsunekko_files(anilist_id)
+    if not all_files or #all_files == 0 then
+        return false
+    end
+    
+    debug_log("Attempting to load subtitles from Kitsunekko mirror...")
+    
+    -- Match files using same logic as Jimaku
+    local matched_files = match_episodes_intelligent(all_files, target_episode, target_season, seasons_data, anilist_entry)
+    
+    if #matched_files == 0 then
+        debug_log("No matching files in Kitsunekko mirror", false)
+        return false
+    end
+    
+    debug_log(string.format("Found %d matching file(s) in Kitsunekko", #matched_files))
+    
+    -- Determine how many to load
+    local max_loads = #matched_files
+    if JIMAKU_MAX_SUBS ~= "all" and type(JIMAKU_MAX_SUBS) == "number" then
+        max_loads = math.min(JIMAKU_MAX_SUBS, #matched_files)
+    end
+    
+    local success_count = 0
+    
+    -- Load local files directly (no download needed)
+    for i = 1, max_loads do
+        local subtitle_file = matched_files[i]
+        
+        debug_log(string.format("Loading local subtitle [%d/%d]: %s", 
+            i, max_loads, subtitle_file.name))
+        
+        if subtitle_file.path and path_exists(subtitle_file.path) then
+            local load_flag = (success_count == 0) and "select" or "auto"
+            
+            mp.commandv("sub-add", subtitle_file.path, load_flag)
+            debug_log(string.format("✓ Loaded from Kitsunekko [%d/%d]: %s", 
+                i, max_loads, subtitle_file.name))
+            
+            table.insert(menu_state.loaded_subs_files, subtitle_file.name)
+            menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+            success_count = success_count + 1
+        else
+            debug_log(string.format("Kitsunekko file not found or inaccessible: %s", subtitle_file.path), true)
+        end
+    end
+    
+    if success_count > 0 then
+        conditional_osd(string.format("✓ Loaded %d subtitle(s) from Kitsunekko", success_count), 4, is_auto)
+        return true
+    end
+    
+    return false
+end
+
 -- Smart subtitle download with intelligent matching
 local function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anilist_entry, is_auto)
     -- Fetch all files for this entry
     local all_files = fetch_all_episode_files(entry_id)
     
     if not all_files or #all_files == 0 then
-        debug_log("No subtitle files available for this entry", false)
+        debug_log("No subtitle files available from Jimaku, checking Kitsunekko...", false)
+        -- Try kitsunekko as fallback if Jimaku has no results
+        if KITSUNEKKO_PREFER_LOCAL and anilist_entry and anilist_entry.id then
+            return load_kitsunekko_subtitles(anilist_entry.id, target_episode, target_season, seasons_data, anilist_entry, is_auto)
+        end
         return false
     end
     
@@ -3002,14 +3505,15 @@ search_anilist = function(is_auto)
 
     -- Check cache first
     local cache_key = search_title:lower()
+    local data = nil
+    
     if not STANDALONE_MODE and anilist_cache[cache_key] then
         local cache_entry = anilist_cache[cache_key]
         local cache_age = os.time() - cache_entry.timestamp
         if cache_age < 86400 then  -- Cache valid for 24 hours
             debug_log(string.format("Using cached AniList results for '%s' (%d seconds old)", 
                 search_title, cache_age))
-            local data = {Page = {media = cache_entry.results}}
-            -- Continue with the rest of the function using cached data
+            data = {Page = {media = cache_entry.results}}
         else
             debug_log(string.format("AniList cache expired for '%s' (%d seconds old)", 
                 search_title, cache_age))
@@ -3018,8 +3522,7 @@ search_anilist = function(is_auto)
     end
 
     -- Make API request if not cached or cache expired
-    local data
-    if not anilist_cache[cache_key] then
+    if not data or (data.Page and data.Page.media and #data.Page.media == 0) then
         local query = [[
         query ($search: String) {
           Page (page: 1, perPage: 15) {
@@ -3040,7 +3543,7 @@ search_anilist = function(is_auto)
 
         data = make_anilist_request(query, {search = search_title})
         
-        -- Cache the results
+        -- Cache the results (only if we got a response)
         if data and data.Page and data.Page.media then
             anilist_cache[cache_key] = {
                 results = data.Page.media,
@@ -3050,28 +3553,46 @@ search_anilist = function(is_auto)
                 save_anilist_cache()
             end
             debug_log(string.format("Cached AniList results for '%s'", search_title))
-        end
-    else
-        data = {Page = {media = anilist_cache[cache_key].results}}
-    end
-    
-    -- FALLBACK: If no results, try alternative searches
-    if data and data.Page and data.Page.media and #data.Page.media == 0 then
-        debug_log("No results found - trying fallback searches...")
-        
-        -- Fallback 1: Try original title (without cleaning)
-        if search_title ~= parsed.title then
-            debug_log("Fallback 1: Trying original title: " .. parsed.title)
-            data = make_anilist_request(query, {search = parsed.title})
-        end
-        
-        -- Fallback 2: Try removing subtitle/arc name (text after " - ")
-        if data and data.Page and data.Page.media and #data.Page.media == 0 then
-            local base_title = search_title:match("^(.-)%s*%-%s*.+$")
-            if base_title and base_title:len() > 2 then
-                debug_log("Fallback 2: Trying base title without arc: " .. base_title)
-                data = make_anilist_request(query, {search = base_title})
+        elseif data == nil then
+            -- Network error - try offline fallback
+            debug_log("Network error or no AniList response - attempting offline fallback", true)
+            
+            if KITSUNEKKO_ENABLED then
+                mp.osd_message("AniList unavailable - searching locally...", 3)
+                local offline_match = search_kitsunekko_offline(search_title, parsed.episode)
+                
+                if offline_match then
+                    debug_log("Found offline match: " .. (offline_match.kitsuinfo.name or "Unknown"))
+                    local files = get_kitsunekko_files_from_path(offline_match.path)
+                    
+                    if files and #files > 0 then
+                        local matched_files = match_episodes_intelligent(files, parsed.episode, parsed.season, {}, {})
+                        
+                        if #matched_files > 0 then
+                            local max_loads = (JIMAKU_MAX_SUBS == "all") and #matched_files or math.min(JIMAKU_MAX_SUBS, #matched_files)
+                            local loaded = 0
+                            
+                            for i = 1, max_loads do
+                                local file = matched_files[i]
+                                if file and file.path and path_exists(file.path) then
+                                    local load_flag = (loaded == 0) and "select" or "auto"
+                                    mp.commandv("sub-add", file.path, load_flag)
+                                    loaded = loaded + 1
+                                    debug_log(string.format("Loaded offline: %s", file.name))
+                                end
+                            end
+                            
+                            if loaded > 0 then
+                                conditional_osd(string.format("Loaded %d subtitle(s) from local mirror", loaded), 4, is_auto)
+                                return
+                            end
+                        end
+                    end
+                end
             end
+            
+            conditional_osd("AniList: Network error. No local fallback.", 3, is_auto)
+            return
         end
         
         -- Fallback 3: Try first word only (for complex titles)
@@ -3206,6 +3727,14 @@ if not STANDALONE_MODE then
     -- Load caches
     load_anilist_cache()
     load_jimaku_cache()
+    
+    -- Initialize Kitsunekko mirror if configured
+    if KITSUNEKKO_ENABLED and KITSUNEKKO_MIRROR_PATH and KITSUNEKKO_MIRROR_PATH ~= "" then
+        debug_log("Kitsunekko mirror support enabled: " .. KITSUNEKKO_MIRROR_PATH)
+        -- Scan will happen on-demand when needed
+    else
+        debug_log("Kitsunekko mirror support disabled (set KITSUNEKKO_ENABLED = true and KITSUNEKKO_MIRROR_PATH to enable)")
+    end
     
     -- Keybind 'A' to trigger the search
     mp.add_key_binding("A", "anilist-search", search_anilist)
