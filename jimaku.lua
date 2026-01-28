@@ -2056,6 +2056,14 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                 end
             end
 
+            -- Filter out disabled preferred groups
+            for _, pref_group in ipairs(JIMAKU_PREFERRED_GROUPS) do
+                if not pref_group.enabled and file.name:lower():match(pref_group.name:lower()) then
+                    debug_log(string.format("Skipping subtitle due to disabled group '%s': %s", pref_group.name, file.name))
+                    goto next_file
+                end
+            end
+
             -- Calculate priority score based on preferred groups
             for i, pref_group in ipairs(JIMAKU_PREFERRED_GROUPS) do
                 if pref_group.enabled and file.name:lower():match(pref_group.name:lower()) then
