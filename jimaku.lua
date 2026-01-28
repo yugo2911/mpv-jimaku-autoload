@@ -601,7 +601,7 @@ show_subtitle_browser = function()
         end
         
         -- Removed 'display_num' from the format string below
-        local item_text = string.format("{\\fs16}%d. %s", display_idx, file.name)
+        local item_text = string.format("{\\fs%d}%d. %s", JIMAKU_FONT_SIZE - 8, display_idx, file.name)
         if is_loaded then item_text = "✓ " .. item_text end
         
         table.insert(items, {
