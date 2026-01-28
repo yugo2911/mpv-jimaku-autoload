@@ -616,9 +616,22 @@ logical_sort_files = function(files)
         elseif s_b then return true  -- b has season, a doesn't
         end
         
-        -- Secondary: Episode
+        -- Secondary: Episode (handle both numbers and strings for fractional episodes)
         if e_a and e_b then
-            if e_a ~= e_b then return e_a < e_b end
+            -- Convert both to numbers for comparison
+            local num_a = tonumber(e_a)
+            local num_b = tonumber(e_b)
+            
+            if num_a and num_b then
+                if num_a ~= num_b then return num_a < num_b end
+            elseif num_a then 
+                return true -- numeric episode comes before non-numeric
+            elseif num_b then 
+                return false
+            else
+                -- Both are non-numeric strings, compare as strings
+                if e_a ~= e_b then return tostring(e_a) < tostring(e_b) end
+            end
         elseif e_a then return true -- a has episode, b doesn't
         elseif e_b then return false -- b has episode, a doesn't
         end
