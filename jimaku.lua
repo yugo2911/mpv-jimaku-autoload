@@ -50,6 +50,7 @@ local JIMAKU_PREFERRED_GROUPS = {   -- Preferred loaded filename add wanted patt
     
     {name = "Nekomoe kissaten", enabled = true},
     {name = "LoliHouse", enabled = true},
+    {name = "Retimed", enabled = true},
     {name = "WEBRip", enabled = true},
     {name = "WEB-DL", enabled = true},
     {name = "WEB", enabled = true},
