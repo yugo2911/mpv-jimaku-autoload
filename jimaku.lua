@@ -108,7 +108,7 @@ local debug_log, search_anilist, load_jimaku_api_key, is_archive_file
 local show_main_menu, show_subtitles_menu, show_search_menu
 local show_info_menu, show_settings_menu, show_cache_menu
 local show_ui_settings_menu, show_filter_settings_menu, show_preferred_groups_menu
-local show_subtitle_browser, fetch_all_episode_files, logical_sort_files
+local show_subtitle_browser, fetch_all_episode_files
 local parse_jimaku_filename, download_selected_subtitle_action
 local show_current_match_info_action, reload_subtitles_action
 local download_more_action, clear_subs_action, show_search_results_menu
@@ -462,7 +462,11 @@ end
 show_subtitles_menu = function()
     local items = {
         {text = "1. Browse All Jimaku Subs  →", action = function()
+<<<<<<< HEAD
             menu_state.browser_page = nil -- Signal to jump to current episode TODO:FIX THIS
+=======
+            menu_state.browser_page = 1
+>>>>>>> parent of d3f0ec0 (subs browser sorting needs fixing)
             show_subtitle_browser()
         end},
         {text = "2. Reload Current Subtitles", action = reload_subtitles_action},
@@ -484,11 +488,7 @@ show_subtitle_browser = function()
     -- Fetch files if not cached
     if not menu_state.browser_files then
         mp.osd_message("Fetching subtitle list...", 30)
-        local files = fetch_all_episode_files(jimaku_id)
-        if files then
-            logical_sort_files(files)
-        end
-        menu_state.browser_files = files
+        menu_state.browser_files = fetch_all_episode_files(jimaku_id)
         mp.osd_message("", 0)
     end
 
@@ -515,24 +515,6 @@ show_subtitle_browser = function()
         end
     else
         filtered_files = all_files
-    end
-
-    -- If page is nil, jump to current episode
-    if not menu_state.browser_page or menu_state.browser_page < 1 then
-        menu_state.browser_page = 1
-        local target_ep = menu_state.target_episode
-        local target_season = menu_state.target_season
-        
-        if target_ep then
-            for i, file in ipairs(filtered_files) do
-                local s, e = parse_jimaku_filename(file.name)
-                -- Simple match: if episode matches (and season if present)
-                if e == target_ep and (not s or not target_season or s == target_season) then
-                    menu_state.browser_page = math.ceil(i / menu_state.items_per_page)
-                    break
-                end
-            end
-        end
     end
 
     local page = menu_state.browser_page
@@ -601,31 +583,6 @@ show_subtitle_browser = function()
         title_prefix, page, total_pages, #filtered_files)
     
     push_menu(title, items, footer, on_left, on_right)
-end
-
--- Helper for sorting browser files logically
-logical_sort_files = function(files)
-    table.sort(files, function(a, b)
-        local s_a, e_a = parse_jimaku_filename(a.name)
-        local s_b, e_b = parse_jimaku_filename(b.name)
-        
-        -- Primary: Season (if exists)
-        if s_a and s_b then
-            if s_a ~= s_b then return s_a < s_b end
-        elseif s_a then return false -- a has season, b doesn't
-        elseif s_b then return true  -- b has season, a doesn't
-        end
-        
-        -- Secondary: Episode
-        if e_a and e_b then
-            if e_a ~= e_b then return e_a < e_b end
-        elseif e_a then return true -- a has episode, b doesn't
-        elseif e_b then return false -- b has episode, a doesn't
-        end
-        
-        -- Tertiary: Filename
-        return a.name:lower() < b.name:lower()
-    end)
 end
 
 -- Search Submenu
