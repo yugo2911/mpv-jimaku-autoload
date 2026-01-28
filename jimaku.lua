@@ -772,7 +772,7 @@ select_anilist_result = function(selected)
     -- We can reuse smart_match_anilist by passing it as the ONLY result
     local episode_num = tonumber(menu_state.parsed_data.episode) or 1
     local season_num = menu_state.parsed_data.season
-    local file_year = extract_year(mp.get_property("filename"))
+    local file_year = extract_year(mp.get_property("media-title") or mp.get_property("filename"))
     
     local media, actual_episode, actual_season, seasons, match_method, match_confidence = 
         smart_match_anilist({selected}, menu_state.parsed_data, episode_num, season_num, file_year)
@@ -1524,8 +1524,8 @@ local function roman_to_int(s)
     return res > 0 and res or nil
 end
 
--- Main parsing function with all fixes applied
-local function parse_filename(filename)
+-- Main parsing function with all fixes applied (handles filenames and media-titles)
+local function parse_media_title(filename)
     if not filename then return nil end
     
     -- Log for debugging
@@ -1547,9 +1547,25 @@ local function parse_filename(filename)
         confidence = "low"  -- Track parsing confidence
     }
     
-    -- Strip file extension and path
-    local clean_name = filename:gsub("%.%w%w%w?%w?$", "")  -- Remove extension
-    clean_name = clean_name:match("([^/\\]+)$") or clean_name  -- Remove path
+    -- Strip file extension and path (but preserve URL components and stream titles)
+    local is_url = filename:match("^https?://")
+    local clean_name = filename
+    
+    -- Only strip extension and path if it's a REAL filesystem path
+    -- Heuristic: paths typically have . for extensions and / only for directory separators
+    -- Media titles like "Title Ep 1" or "Title SUB/DUB" should be left alone
+    if not is_url then
+        -- Check if this looks like a filesystem path (has file extension)
+        local has_extension = filename:match("%.%w%w%w?%w?$")
+        if has_extension then
+            clean_name = clean_name:gsub("%.%w%w%w?%w?$", "")  -- Remove extension
+            clean_name = clean_name:match("([^/\\]+)$") or clean_name  -- Remove path
+        end
+        -- Otherwise leave it as-is (it's probably a media-title like "Show Name Ep 1")
+    else
+        -- For URLs, extract just the media-title portion (after last /)
+        clean_name = clean_name:match("([^/]+)$") or clean_name
+    end
     
     -- FIX #4: Extract release group first with validation
     result.group = extract_group_name(clean_name)
@@ -1896,7 +1912,7 @@ local function test_parser(input_file)
     local failures = 0
     
     for _, filename in ipairs(lines) do
-        local res = parse_filename(filename)
+        local res = parse_media_title(filename)
         if res then
             table.insert(results, res)
         else
@@ -2957,12 +2973,20 @@ end
 
 -- Main search function with integrated smart matching
 search_anilist = function(is_auto)
-    local filename = mp.get_property("filename")
-    if not filename then return end
+    -- Try media-title first (for streams/URLs), then filename (for local files)
+    local title_source = mp.get_property("media-title") or mp.get_property("filename")
+    if not title_source then return end
 
-    local parsed = parse_filename(filename)
+    -- Check if this is a URL (protocol-based source)
+    local is_url = title_source:match("^https?://")
+    
+    local parsed = parse_media_title(title_source)
     if not parsed then
-        conditional_osd("AniList: Failed to parse filename", 3, is_auto)
+        if not is_url then
+            conditional_osd("AniList: Failed to parse filename", 3, is_auto)
+        else
+            conditional_osd("AniList: Failed to parse stream title", 3, is_auto)
+        end
         return
     end
     
@@ -3229,19 +3253,19 @@ if not STANDALONE_MODE then
         end
     end)
     
-    -- Auto-download subtitles on file load if enabled
+    -- Auto-download subtitles on file load if enabled (works for both local files and streams)
     if JIMAKU_AUTO_DOWNLOAD then
         mp.register_event("file-loaded", function()
-            -- Reset menu state on new file
+            -- Reset menu state on new file/stream
             menu_state.current_match = nil
             menu_state.jimaku_id = nil
             menu_state.browser_files = nil
             update_loaded_subs_list()
             
-            -- Small delay to ensure file is ready
+            -- Small delay to ensure file/stream is ready
             mp.add_timeout(0.5, function() search_anilist(true) end)
         end)
-        debug_log("AniList Script Initialized. Press 'Ctrl+j' or 'Alt+a' for menu.")
+        debug_log("AniList Script Initialized. Works on local files and streams. Press 'Ctrl+j' or 'Alt+a' for menu.")
     else
         mp.register_event("file-loaded", update_loaded_subs_list)
         debug_log("AniList Script Initialized. Press 'Ctrl+j' or 'Alt+a' for menu.")
