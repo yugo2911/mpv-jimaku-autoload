@@ -42,6 +42,7 @@ local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (s
 local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
 local JIMAKU_PREFERRED_GROUPS = {   -- Preferred loaded filename add wanted pattern SDH, NanakoRaws etc.. order matters
     
+    {name = "Nekomoe kissaten", enabled = true},
     {name = "LoliHouse", enabled = true},
     {name = "WEBRip", enabled = true},
     {name = "WEB-DL", enabled = true},
