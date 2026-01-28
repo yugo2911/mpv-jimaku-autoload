@@ -606,8 +606,8 @@ end
 -- Helper for sorting browser files logically
 logical_sort_files = function(files)
     table.sort(files, function(a, b)
-        local s_a, e_a, _ = parse_jimaku_filename(a.name)
-        local s_b, e_b, _ = parse_jimaku_filename(b.name)
+        local s_a, e_a = parse_jimaku_filename(a.name)
+        local s_b, e_b = parse_jimaku_filename(b.name)
         
         -- Primary: Season (if exists)
         if s_a and s_b then
@@ -1069,24 +1069,6 @@ local function convert_jimaku_to_anilist_episode(jimaku_ep, target_season, seaso
     return jimaku_ep - cumulative
 end
 
--- Extract Japanese absolute episode number (第222話 style)
-local function parse_japanese_episode(filename)
-    if not filename then return nil end
-    
-    -- Normalize full-width digits first
-    filename = normalize_digits(filename)
-    
-    -- Extract Japanese episode number
-    local ep = filename:match("第(%d+)[話回]")
-    if ep then 
-        local num = tonumber(ep)
-        if num and num > 0 and num <= 9999 then
-            return num
-        end
-    end
-    return nil
-end
-
 -- Normalize full-width digits to ASCII
 local function normalize_digits(s)
     if not s then return s end
@@ -1105,13 +1087,10 @@ end
 
 -- Parse Jimaku subtitle filename to extract episode number(s)
 parse_jimaku_filename = function(filename)
-    if not filename then return nil, nil, nil end
+    if not filename then return nil, nil end
     
     -- Normalize full-width digits
     filename = normalize_digits(filename)
-    
-    -- Check for Japanese absolute episode number
-    local japanese_absolute = parse_japanese_episode(filename)
     
     -- Pattern cascade (ordered by specificity - MOST specific first)
     local patterns = {
@@ -1183,7 +1162,7 @@ parse_jimaku_filename = function(filename)
                 if season_num and episode_num and 
                    season_num >= 1 and season_num <= 20 and
                    episode_num >= 0 and episode_num <= 999 then
-                    return season_num, episode_num, japanese_absolute
+                    return season_num, episode_num
                 end
             end
         elseif ptype == "fractional" then
@@ -1192,7 +1171,7 @@ parse_jimaku_filename = function(filename)
                 -- Additional validation: not a version number
                 local before = filename:match("([^%s]-)%s*" .. e:gsub("%.", "%%."))
                 if not before or not before:lower():match("v%d*$") then
-                    return nil, e, japanese_absolute  -- Return as string for fractional
+                    return nil, e  -- Return as string for fractional
                 end
             end
         else  -- Regular episode
@@ -1201,13 +1180,13 @@ parse_jimaku_filename = function(filename)
                 local num = tonumber(e)
                 -- Sanity check: episode numbers should be reasonable
                 if num and num >= 0 and num <= 999 then
-                    return nil, num, japanese_absolute
+                    return nil, num
                 end
             end
         end
     end
     
-    return nil, nil, japanese_absolute
+    return nil, nil
 end
 
 -------------------------------------------------------------------------------
@@ -2024,7 +2003,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     
     -- Parse all filenames and build episode map
     for _, file in ipairs(files) do
-        local jimaku_season, jimaku_episode, japanese_absolute = parse_jimaku_filename(file.name)
+        local jimaku_season, jimaku_episode = parse_jimaku_filename(file.name)
         
         if jimaku_episode then
             local anilist_episode = nil
@@ -2127,14 +2106,18 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             end
             
             -- CASE 3: Japanese absolute episode number (第222話) matches target cumulative
-            -- This is PRIORITY for long-running shows with absolute numbering
-            if not is_match and japanese_absolute and japanese_absolute == target_cumulative then
-                is_match = true
-                anilist_episode = target_episode
-                match_type = "japanese_absolute_match"
-                confidence = title_match and "high" or "medium-high"
-                debug_log(string.format("  MATCHED via Japanese absolute: 第%d話 = target cumulative %d", 
-                    japanese_absolute, target_cumulative))
+            -- Check directly in filename since parse_jimaku_filename returns early on SxxExx match
+            if not is_match then
+                local japanese_ep = file.name:match("第(%d+)[話回]")
+                if japanese_ep then
+                    japanese_ep = tonumber(japanese_ep)
+                    if japanese_ep == target_cumulative then
+                        is_match = true
+                        anilist_episode = target_episode
+                        match_type = "japanese_absolute_match"
+                        confidence = title_match and "high" or "medium-high"
+                    end
+                end
             end
             
             -- VERIFICATION STEP 2: Adjust confidence based on AniList metadata
@@ -2161,7 +2144,6 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                 filename = file.name,
                 jimaku_season = jimaku_season,
                 jimaku_episode = ep_num,
-                japanese_absolute = japanese_absolute,
                 anilist_episode = anilist_episode,
                 match_type = match_type,
                 confidence = confidence,
@@ -2208,11 +2190,6 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             local p = all_parsed[i]
             local jimaku_display = p.jimaku_season and string.format("S%dE%d", p.jimaku_season, p.jimaku_episode) 
                                    or string.format("E%d", p.jimaku_episode)
-            
-            -- Add Japanese absolute episode if present
-            if p.japanese_absolute then
-                jimaku_display = jimaku_display .. string.format(" (第%d話)", p.japanese_absolute)
-            end
             
             debug_log(string.format("  [%d] %s... → Jimaku: %s | Title: %s | Tried: %s", 
                 i, 
