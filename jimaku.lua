@@ -928,15 +928,39 @@ end
 
 -- Kitsunekko Mirror Settings Submenu
 show_kitsunekko_settings_menu = function(selected)
+    ---------------------------------------------------------
+    -- INTERNAL DEBUG CONFIG
+    ---------------------------------------------------------
+    local debug_active = true  -- Set to false to disable logs
+    
+    local function log_debug(msg)
+        if debug_active then 
+            mp.msg.info("[Kitsunekko-Debug] " .. tostring(msg)) 
+        end
+    end
+    ---------------------------------------------------------
+
+    log_debug("Opening Settings Menu...")
+    
+    -- 1. Safe Status Checks
     local enabled_status = KITSUNEKKO_ENABLED and "✓ Enabled" or "✗ Disabled"
     local prefer_status = KITSUNEKKO_PREFER_LOCAL and "✓ Prefer Local" or "✗ Fallback"
-    local mirror_path = KITSUNEKKO_MIRROR_PATH ~= "" and KITSUNEKKO_MIRROR_PATH or "Not set"
-    local mirror_display = mirror_path:len() > 40 and 
-        "..." .. mirror_path:sub(-37) or mirror_path
     
+    -- 2. Safe Path Handling (Prevents nil crash)
+    local raw_path = KITSUNEKKO_MIRROR_PATH
+    local mirror_path = (type(raw_path) == "string" and raw_path ~= "") and raw_path or "Not set"
+    
+    local mirror_display = mirror_path
+    if type(mirror_path) == "string" and mirror_path:len() > 40 then
+        mirror_display = "..." .. mirror_path:sub(-37)
+    end
+    
+    local debug_status_text = debug_active and "✓ ON" or "OFF"
+
     local items = {
         {text = "1. Enable Mirror", hint = enabled_status, action = function()
             KITSUNEKKO_ENABLED = not KITSUNEKKO_ENABLED
+            log_debug("Toggled Enabled: " .. tostring(KITSUNEKKO_ENABLED))
             if KITSUNEKKO_ENABLED then
                 mp.osd_message("Kitsunekko enabled. Set path in jimaku.lua config.", 3)
             end
@@ -944,26 +968,46 @@ show_kitsunekko_settings_menu = function(selected)
         end},
         {text = "2. Load Strategy", hint = prefer_status, action = function()
             KITSUNEKKO_PREFER_LOCAL = not KITSUNEKKO_PREFER_LOCAL
+            log_debug("Toggled Strategy: " .. tostring(KITSUNEKKO_PREFER_LOCAL))
             pop_menu(); show_kitsunekko_settings_menu(2)
         end},
         {text = "3. Mirror Path: " .. mirror_display, action = function()
+            log_debug("Clicked Path Edit (Current: " .. mirror_path .. ")")
             mp.osd_message("Edit KITSUNEKKO_MIRROR_PATH in jimaku.lua config", 3)
             pop_menu(); show_kitsunekko_settings_menu(3)
         end},
         {text = "4. Scan Mirror Now", action = function()
+            log_debug("Scanning...")
             mp.osd_message("Scanning mirror...", 2)
-            scan_kitsunekko_mirror()
-            local count = count_table(kitsunekko_anilist_index)
+            
+            if scan_kitsunekko_mirror then 
+                scan_kitsunekko_mirror() 
+            else
+                log_debug("CRITICAL: scan_kitsunekko_mirror function not found")
+            end
+
+            -- Safe count check to prevent crash on nil index
+            local count = 0
+            if type(kitsunekko_anilist_index) == "table" then
+                count = count_table(kitsunekko_anilist_index)
+                log_debug("Scan Result: " .. count .. " entries")
+            else
+                log_debug("ERROR: Index is nil after scan")
+            end
+            
             mp.osd_message(string.format("✓ Indexed %d anime entries", count), 4)
             pop_menu(); show_kitsunekko_settings_menu(4)
         end},
         {text = "5. Cache Status", action = function()
-            local count = count_table(kitsunekko_anilist_index)
+            local count = (type(kitsunekko_anilist_index) == "table") 
+                and count_table(kitsunekko_anilist_index) or 0
+            log_debug("Cache check: " .. count)
             mp.osd_message(string.format("Cached: %d entries", count), 3)
             pop_menu(); show_kitsunekko_settings_menu(5)
         end},
         {text = "0. Back to Settings", action = pop_menu},
     }
+    
     push_menu("Kitsunekko Mirror", items, nil, nil, nil, selected)
 end
 
