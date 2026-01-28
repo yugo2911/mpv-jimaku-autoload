@@ -13,6 +13,8 @@ local PARSER_LOG_FILE
 local TEST_FILE
 local SUBTITLE_CACHE_DIR
 local JIMAKU_API_KEY_FILE
+local ANILIST_CACHE_FILE
+local JIMAKU_CACHE_FILE
 local ANILIST_API_URL = "https://graphql.anilist.co"
 local JIMAKU_API_URL = "https://jimaku.cc/api"
 -- local PAUSE_STATE = false -- re
@@ -25,6 +27,8 @@ if STANDALONE_MODE then
     TEST_FILE = "./torrents.txt"
     SUBTITLE_CACHE_DIR = "./subtitle-cache"
     JIMAKU_API_KEY_FILE = "./jimaku-api-key.txt"
+    ANILIST_CACHE_FILE = "./anilist-cache.json"
+    JIMAKU_CACHE_FILE = "./jimaku-cache.json"
 else
     CONFIG_DIR = mp.command_native({"expand-path", "~~/"})
     LOG_FILE = CONFIG_DIR .. "/anilist-debug.log"
@@ -32,6 +36,8 @@ else
     TEST_FILE = CONFIG_DIR .. "/torrents.txt"
     SUBTITLE_CACHE_DIR = CONFIG_DIR .. "/subtitle-cache"
     JIMAKU_API_KEY_FILE = CONFIG_DIR .. "/jimaku-api-key.txt"
+    ANILIST_CACHE_FILE = CONFIG_DIR .. "/anilist-cache.json"
+    JIMAKU_CACHE_FILE = CONFIG_DIR .. "/jimaku-cache.json"
 end
 
 -- Parser configuration
@@ -63,8 +69,14 @@ local JIMAKU_API_KEY = ""
 -- Episode file cache
 local episode_cache = {}
 
+-- AniList search cache (persistent)
+local anilist_cache = {}
+
+-- Jimaku entry cache (persistent) 
+local jimaku_cache = {}
+
 -- On-screen message configuration
-local INITIAL_OSD_MESSAGES = false -- if false, suppresses initial OSD messages during startup
+local INITIAL_OSD_MESSAGES = true -- if false, suppresses initial OSD messages during startup
 
 -------------------------------------------------------------------------------
 -- MENU SYSTEM STATE
@@ -982,6 +994,18 @@ show_cache_menu = function()
             mp.osd_message("Memory cache cleared", 2)
             pop_menu()
         end},
+        {text = "3. Clear AniList Search Cache", action = function()
+            anilist_cache = {}
+            save_anilist_cache()
+            mp.osd_message("AniList cache cleared", 2)
+            pop_menu()
+        end},
+        {text = "4. Clear Jimaku Entry Cache", action = function()
+            jimaku_cache = {}
+            save_jimaku_cache()
+            mp.osd_message("Jimaku cache cleared", 2)
+            pop_menu()
+        end},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("Cache Management", items)
@@ -1042,6 +1066,74 @@ local function ensure_subtitle_cache()
             playback_only = false,
             args = args
         })
+    end
+end
+
+-- Load AniList cache from file
+local function load_anilist_cache()
+    if STANDALONE_MODE then return end  -- Skip caching in standalone mode
+    
+    local f = io.open(ANILIST_CACHE_FILE, "r")
+    if f then
+        local content = f:read("*all")
+        f:close()
+        local ok, data = pcall(utils.parse_json, content)
+        if ok and data then
+            anilist_cache = data
+            debug_log("Loaded AniList cache with " .. #data .. " entries")
+        else
+            debug_log("Failed to parse AniList cache file", true)
+        end
+    else
+        debug_log("AniList cache file not found - will create on first search")
+    end
+end
+
+-- Save AniList cache to file
+local function save_anilist_cache()
+    if STANDALONE_MODE then return end  -- Skip caching in standalone mode
+    
+    local f = io.open(ANILIST_CACHE_FILE, "w")
+    if f then
+        f:write(utils.format_json(anilist_cache))
+        f:close()
+        debug_log("Saved AniList cache with " .. #anilist_cache .. " entries")
+    else
+        debug_log("Failed to save AniList cache", true)
+    end
+end
+
+-- Load Jimaku cache from file
+local function load_jimaku_cache()
+    if STANDALONE_MODE then return end  -- Skip caching in standalone mode
+    
+    local f = io.open(JIMAKU_CACHE_FILE, "r")
+    if f then
+        local content = f:read("*all")
+        f:close()
+        local ok, data = pcall(utils.parse_json, content)
+        if ok and data then
+            jimaku_cache = data
+            debug_log("Loaded Jimaku cache with " .. #data .. " entries")
+        else
+            debug_log("Failed to parse Jimaku cache file", true)
+        end
+    else
+        debug_log("Jimaku cache file not found - will create on first search")
+    end
+end
+
+-- Save Jimaku cache to file
+local function save_jimaku_cache()
+    if STANDALONE_MODE then return end  -- Skip caching in standalone mode
+    
+    local f = io.open(JIMAKU_CACHE_FILE, "w")
+    if f then
+        f:write(utils.format_json(jimaku_cache))
+        f:close()
+        debug_log("Saved Jimaku cache with " .. #jimaku_cache .. " entries")
+    else
+        debug_log("Failed to save Jimaku cache", true)
     end
 end
 
@@ -1880,6 +1972,22 @@ local function search_jimaku_subtitles(anilist_id)
     
     debug_log(string.format("Searching Jimaku for AniList ID: %d", anilist_id))
     
+    -- Check cache first
+    local cache_key = tostring(anilist_id)
+    if not STANDALONE_MODE and jimaku_cache[cache_key] then
+        local cache_entry = jimaku_cache[cache_key]
+        local cache_age = os.time() - cache_entry.timestamp
+        if cache_age < 3600 then  -- Cache valid for 1 hour
+            debug_log(string.format("Using cached Jimaku entry for AniList ID %d (%d seconds old)", 
+                anilist_id, cache_age))
+            return cache_entry.entry
+        else
+            debug_log(string.format("Jimaku cache expired for AniList ID %d (%d seconds old)", 
+                anilist_id, cache_age))
+            jimaku_cache[cache_key] = nil
+        end
+    end
+    
     -- Search for entry by AniList ID
     local search_url = string.format("%s/entries/search?anilist_id=%d&anime=true", 
         JIMAKU_API_URL, anilist_id)
@@ -1909,6 +2017,17 @@ local function search_jimaku_subtitles(anilist_id)
     end
     
     debug_log(string.format("Found Jimaku entry: %s (ID: %d)", entries[1].name, entries[1].id))
+    
+    -- Cache the result
+    jimaku_cache[cache_key] = {
+        entry = entries[1],
+        timestamp = os.time()
+    }
+    if not STANDALONE_MODE then
+        save_jimaku_cache()
+    end
+    debug_log(string.format("Cached Jimaku entry for AniList ID %d", anilist_id))
+    
     return entries[1]
 end
 
@@ -2856,25 +2975,60 @@ search_anilist = function(is_auto)
 
     conditional_osd("AniList: Searching for " .. search_title .. "...", 3, is_auto)
 
-    local query = [[
-    query ($search: String) {
-      Page (page: 1, perPage: 15) {
-        media (search: $search, type: ANIME) {
-          id
-          title {
-            romaji
-            english
-          }
-          synonyms
-          status
-          episodes
-          format
-        }
-      }
-    }
-    ]]
+    -- Check cache first
+    local cache_key = search_title:lower()
+    if not STANDALONE_MODE and anilist_cache[cache_key] then
+        local cache_entry = anilist_cache[cache_key]
+        local cache_age = os.time() - cache_entry.timestamp
+        if cache_age < 86400 then  -- Cache valid for 24 hours
+            debug_log(string.format("Using cached AniList results for '%s' (%d seconds old)", 
+                search_title, cache_age))
+            local data = {Page = {media = cache_entry.results}}
+            -- Continue with the rest of the function using cached data
+        else
+            debug_log(string.format("AniList cache expired for '%s' (%d seconds old)", 
+                search_title, cache_age))
+            anilist_cache[cache_key] = nil
+        end
+    end
 
-    local data = make_anilist_request(query, {search = search_title})
+    -- Make API request if not cached or cache expired
+    local data
+    if not anilist_cache[cache_key] then
+        local query = [[
+        query ($search: String) {
+          Page (page: 1, perPage: 15) {
+            media (search: $search, type: ANIME) {
+              id
+              title {
+                romaji
+                english
+              }
+              synonyms
+              status
+              episodes
+              format
+            }
+          }
+        }
+        ]]
+
+        data = make_anilist_request(query, {search = search_title})
+        
+        -- Cache the results
+        if data and data.Page and data.Page.media then
+            anilist_cache[cache_key] = {
+                results = data.Page.media,
+                timestamp = os.time()
+            }
+            if not STANDALONE_MODE then
+                save_anilist_cache()
+            end
+            debug_log(string.format("Cached AniList results for '%s'", search_title))
+        end
+    else
+        data = {Page = {media = anilist_cache[cache_key].results}}
+    end
     
     -- FALLBACK: If no results, try alternative searches
     if data and data.Page and data.Page.media and #data.Page.media == 0 then
@@ -3023,6 +3177,10 @@ if not STANDALONE_MODE then
     
     -- Load Jimaku API key
     load_jimaku_api_key()
+    
+    -- Load caches
+    load_anilist_cache()
+    load_jimaku_cache()
     
     -- Keybind 'A' to trigger the search
     mp.add_key_binding("A", "anilist-search", search_anilist)
