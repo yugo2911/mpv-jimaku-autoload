@@ -1285,6 +1285,9 @@ end
 local function clean_parenthetical(title)
     if not title then return title end
     
+    -- Remove hex checksums in brackets: [3A100B6C], [ABC123DE], etc.
+    title = title:gsub("%s*%[[0-9A-Fa-f]+%]%s*", " ")
+    
     -- Remove resolution tags: (1080p), (720p), (480p), etc.
     title = title:gsub("%s*%(%d%d%d%d?p%)%s*", " ")
     
