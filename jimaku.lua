@@ -1285,12 +1285,20 @@ end
 local function clean_parenthetical(title)
     if not title then return title end
     
-    -- Remove quality/format tags in parentheses
-    title = title:gsub("%s*%(BD[^%)]*%)%s*", " ")
-    title = title:gsub("%s*%(DVD[^%)]*%)%s*", " ")
-    title = title:gsub("%s*%(WEB[^%)]*%)%s*", " ")
-    title = title:gsub("%s*%(Blu%-ray[^%)]*%)%s*", " ")
-    title = title:gsub("%s*%(Remux[^%)]*%)%s*", " ")
+    -- Remove quality/format tags in parentheses (more aggressive matching)
+    -- Handles: (BD ...), (DVD ...), (WEB ...), (Remux ...), etc.
+    title = title:gsub("%s*%([^)]*BD[^)]*%)%s*", " ")
+    title = title:gsub("%s*%([^)]*DVD[^)]*%)%s*", " ")
+    title = title:gsub("%s*%([^)]*WEB[^)]*%)%s*", " ")
+    title = title:gsub("%s*%([^)]*Blu%-ray[^)]*%)%s*", " ")
+    title = title:gsub("%s*%([^)]*Remux[^)]*%)%s*", " ")
+    title = title:gsub("%s*%([^)]*HEVC[^)]*%)%s*", " ")
+    
+    -- Remove any unclosed parentheses with quality keywords
+    title = title:gsub("%s*%-?%s*%([^)]*BD.*$", "")
+    title = title:gsub("%s*%-?%s*%([^)]*DVD.*$", "")
+    title = title:gsub("%s*%-?%s*%([^)]*WEB.*$", "")
+    title = title:gsub("%s*%-?%s*%([^)]*Remux.*$", "")
     
     -- Remove language codes in parentheses: (JP), (EN), (KR), (US), etc.
     title = title:gsub("%s*%([A-Z][A-Z]%)%s*", " ")
