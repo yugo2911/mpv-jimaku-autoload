@@ -6,68 +6,63 @@ if not STANDALONE_MODE then
     utils = require 'mp.utils'
 end
 
--------------------------------------------------------------------------------
 -- CONFIGURATION
--------------------------------------------------------------------------------
-
--- MPV Script Options (read from script-opts/jimaku.conf)
-local opts = {
-    -- API Configuration
-    jimaku_api_key = "",  -- Your Jimaku API key
-    
-    -- Download Behavior
-    max_subs = 5,  -- Maximum number of subtitles to download ("all" for unlimited)
-    auto_download = true,  -- Auto-download on file load
-    hide_signs_only = false,  -- Filter out sign/song-only subtitles
-    
-    -- Preferred subtitle groups (comma-separated, in priority order)
-    preferred_groups = "WEBRip,WEB-DL,WEB,Amazon,AMZN,Netflix",
-    
-    -- UI Settings
-    items_per_page = 6,  -- Files per page in browser
-    menu_timeout = 30,  -- Auto-close menu after seconds
-    font_size = 16,  -- Menu font size
-    
-    -- Logging
-    initial_osd_messages = false,  -- Show startup messages
-    log_only_errors = false,  -- Only log errors
-}
-
--- Read configuration from script-opts/jimaku.conf
-if not STANDALONE_MODE then
-    require 'mp.options'.read_options(opts, "jimaku")
-end
-
--- File paths
 local CONFIG_DIR
 local LOG_FILE
+local PARSER_LOG_FILE
+local TEST_FILE
 local SUBTITLE_CACHE_DIR
+local JIMAKU_API_KEY_FILE
+local ANILIST_API_URL = "https://graphql.anilist.co"
+local JIMAKU_API_URL = "https://jimaku.cc/api"
+-- local PAUSE_STATE = false -- re
+
 
 if STANDALONE_MODE then
     CONFIG_DIR = "."
-    LOG_FILE = "./jimaku-debug.log"
+    LOG_FILE = "./anilist-debug.log"
+    PARSER_LOG_FILE = "./parser-debug.log"
+    TEST_FILE = "./torrents.txt"
     SUBTITLE_CACHE_DIR = "./subtitle-cache"
+    JIMAKU_API_KEY_FILE = "./jimaku-api-key.txt"
 else
     CONFIG_DIR = mp.command_native({"expand-path", "~~/"})
-    LOG_FILE = CONFIG_DIR .. "/jimaku-debug.log"
+    LOG_FILE = CONFIG_DIR .. "/anilist-debug.log"
+    PARSER_LOG_FILE = CONFIG_DIR .. "/parser-debug.log"
+    TEST_FILE = CONFIG_DIR .. "/torrents.txt"
     SUBTITLE_CACHE_DIR = CONFIG_DIR .. "/subtitle-cache"
+    JIMAKU_API_KEY_FILE = CONFIG_DIR .. "/jimaku-api-key.txt"
 end
 
--- API URLs
-local ANILIST_API_URL = "https://graphql.anilist.co"
-local JIMAKU_API_URL = "https://jimaku.cc/api"
+-- Parser configuration
+local LOG_ONLY_ERRORS = false
 
--- Parse preferred groups from comma-separated string
-local JIMAKU_PREFERRED_GROUPS = {}
-for group in opts.preferred_groups:gmatch("[^,]+") do
-    group = group:match("^%s*(.-)%s*$")  -- Trim whitespace
-    if group ~= "" then
-        table.insert(JIMAKU_PREFERRED_GROUPS, {name = group, enabled = true})
-    end
-end
+-- Jimaku configuration
+local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
+local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
+local JIMAKU_PREFERRED_GROUPS = {   -- Preferred loaded filename add wanted pattern SDH, NanakoRaws etc.. order matters
+
+    {name = "WEBRip", enabled = true},
+    {name = "WEB-DL", enabled = true},
+    {name = "WEB", enabled = true},
+    {name = "Amazon", enabled = true},
+    {name = "AMZN", enabled = true},
+    {name = "Netflix", enabled = true},
+    {name = "CHS", enabled = false}
+}
+local JIMAKU_HIDE_SIGNS_ONLY = false
+local JIMAKU_ITEMS_PER_PAGE = 6
+local JIMAKU_MENU_TIMEOUT = 30  -- Auto-close after seconds
+local JIMAKU_FONT_SIZE = 16
+
+-- Jimaku API key (will be loaded from file)
+local JIMAKU_API_KEY = ""
 
 -- Episode file cache
 local episode_cache = {}
+
+-- On-screen message configuration
+local INITIAL_OSD_MESSAGES = false -- if false, suppresses initial OSD messages during startup
 
 -------------------------------------------------------------------------------
 -- MENU SYSTEM STATE
@@ -92,7 +87,7 @@ local menu_state = {
     browser_page = 1,
     browser_files = nil,  -- Cached file list
     browser_filter = nil, -- Filter text
-    items_per_page = opts.items_per_page,
+    items_per_page = JIMAKU_ITEMS_PER_PAGE,
     
     -- AniList search results (for manual picker)
     search_results = {},
@@ -100,7 +95,7 @@ local menu_state = {
 }
 
 -- Menu configuration
-local MENU_TIMEOUT = opts.menu_timeout
+local MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT
 
 -------------------------------------------------------------------------------
 -- MENU RENDERING & NAVIGATION
@@ -109,7 +104,7 @@ local MENU_TIMEOUT = opts.menu_timeout
 -- Forward declare local functions for correct scoping
 local render_menu_osd, close_menu, push_menu, pop_menu
 local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_left, handle_menu_right, handle_menu_select, handle_menu_num
-local debug_log, search_anilist, is_archive_file
+local debug_log, search_anilist, load_jimaku_api_key, is_archive_file
 local show_main_menu, show_subtitles_menu, show_search_menu
 local show_info_menu, show_settings_menu, show_cache_menu
 local show_ui_settings_menu, show_filter_settings_menu, show_preferred_groups_menu
@@ -165,16 +160,16 @@ render_menu_osd = function()
     local ass = mp.get_property_osd("osd-ass-cc/0")
     
     -- Styling
-    local style_header = string.format("{\\b1\\fs%d\\c&H00FFFF&}", opts.font_size + 4)
-    local style_selected = string.format("{\\b1\\fs%d\\c&H00FF00&}", opts.font_size)
-    local style_normal = string.format("{\\fs%d\\c&HFFFFFF&}", opts.font_size)
-    local style_disabled = string.format("{\\fs%d\\c&H808080&}", opts.font_size)
-    local style_footer = string.format("{\\fs%d\\c&HCCCCCC&}", opts.font_size - 2)
-    local style_dim = string.format("{\\fs%d\\c&H888888&}", opts.font_size - 6)
+    local style_header = string.format("{\\b1\\fs%d\\c&H00FFFF&}", JIMAKU_FONT_SIZE + 4)
+    local style_selected = string.format("{\\b1\\fs%d\\c&H00FF00&}", JIMAKU_FONT_SIZE)
+    local style_normal = string.format("{\\fs%d\\c&HFFFFFF&}", JIMAKU_FONT_SIZE)
+    local style_disabled = string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE)
+    local style_footer = string.format("{\\fs%d\\c&HCCCCCC&}", JIMAKU_FONT_SIZE - 2)
+    local style_dim = string.format("{\\fs%d\\c&H888888&}", JIMAKU_FONT_SIZE - 6)
     
     -- Build menu
     ass = ass .. style_header .. title .. "\\N"
-    ass = ass .. string.format("{\\fs%d\\c&H808080&}", opts.font_size - 2) .. string.rep("━", 40) .. "\\N"
+    ass = ass .. string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE - 2) .. string.rep("━", 40) .. "\\N"
     
     -- Items
     for i, item in ipairs(items) do
@@ -194,7 +189,7 @@ render_menu_osd = function()
     end
     
     -- Footer
-    ass = ass .. string.format("{\\fs%d\\c&H808080&}", opts.font_size - 2) .. string.rep("━", 40) .. "\\N"
+    ass = ass .. string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE - 2) .. string.rep("━", 40) .. "\\N"
     ass = ass .. style_footer .. footer .. "\\N"
     
     mp.osd_message(ass, MENU_TIMEOUT)
@@ -208,7 +203,7 @@ end
 
 -- Helper for conditional OSD messages (suppress during auto-fetch if configured)
 local function conditional_osd(message, duration, is_auto)
-    if not is_auto or opts.initial_osd_messages then
+    if not is_auto or INITIAL_OSD_MESSAGES then
         mp.osd_message(message, duration)
     end
 end
@@ -399,7 +394,7 @@ end
 
 -- Download a specific subtitle file selected from browser
 download_selected_subtitle_action = function(file)
-    if not opts.jimaku_api_key or opts.jimaku_api_key == "" then
+    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
         mp.osd_message("Error: Jimaku API key not set", 3)
         return
     end
@@ -409,7 +404,7 @@ download_selected_subtitle_action = function(file)
     
     local download_args = {
         "curl", "-s", "-L", "-o", subtitle_path,
-        "-H", "Authorization: " .. opts.jimaku_api_key,
+        "-H", "Authorization: " .. JIMAKU_API_KEY,
         file.url
     }
     
@@ -590,28 +585,26 @@ show_subtitle_browser = function()
     
     local items = {}
     
-    -- Subtitle files (Items 1-4)
+
+    
     for i = start_idx, end_idx do
         local file = filtered_files[i]
         local display_idx = i - start_idx + 1
         
-        -- Parse numbering for display
-        local s, e = parse_jimaku_filename(file.name)
-        local display_num = ""
-        if s and e then display_num = string.format("[S%02dE%02d] ", s, e)
-        elseif e then display_num = string.format("[E%s] ", tostring(e)) end
+        -- We skip the parse_jimaku_filename part entirely since we don't want S/E
         
         local is_loaded = false
         for _, loaded_name in ipairs(menu_state.loaded_subs_files) do
             if loaded_name == file.name then is_loaded = true break end
         end
         
-        local item_text = string.format("%d. %s%s", display_idx, display_num, file.name)
+        -- Removed 'display_num' from the format string below
+        local item_text = string.format("{\\fs16}%d. %s", display_idx, file.name)
         if is_loaded then item_text = "✓ " .. item_text end
         
         table.insert(items, {
             text = item_text,
-            hint = string.format("%.1f KB", file.size / 1024),
+            hint = string.format("{\\fs12}%.1f KB", file.size / 1024),
             action = function() download_selected_subtitle_action(file) end
         })
     end
@@ -846,22 +839,26 @@ end
 
 -- Settings Submenu
 show_settings_menu = function(selected)
-    local auto_dl_status = opts.auto_download and "✓ Enabled" or "✗ Disabled"
+    local auto_dl_status = JIMAKU_AUTO_DOWNLOAD and "✓ Enabled" or "✗ Disabled"
     
     local items = {
         {text = "1. Toggle Auto-download", hint = auto_dl_status, action = function()
-            opts.auto_download = not opts.auto_download
+            JIMAKU_AUTO_DOWNLOAD = not JIMAKU_AUTO_DOWNLOAD
             pop_menu(); show_settings_menu(1)  -- Refresh with same selection
         end},
-        {text = "2. Max Subtitles: " .. opts.max_subs, action = function()
-            if opts.max_subs == 1 then opts.max_subs = 3
-            elseif opts.max_subs == 3 then opts.max_subs = 5
-            elseif opts.max_subs == 5 then opts.max_subs = 10
-            else opts.max_subs = 1 end
+        {text = "2. Max Subtitles: " .. JIMAKU_MAX_SUBS, action = function()
+            if JIMAKU_MAX_SUBS == 1 then JIMAKU_MAX_SUBS = 3
+            elseif JIMAKU_MAX_SUBS == 3 then JIMAKU_MAX_SUBS = 5
+            elseif JIMAKU_MAX_SUBS == 5 then JIMAKU_MAX_SUBS = 10
+            else JIMAKU_MAX_SUBS = 1 end
             pop_menu(); show_settings_menu(2)  -- Refresh with same selection
         end},
         {text = "3. UI & Accessibility  →", action = show_ui_settings_menu},
         {text = "4. Filters & Priority  →", action = show_filter_settings_menu},
+        {text = "5. Reload API Key", action = function()
+            load_jimaku_api_key()
+            pop_menu()
+        end},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     
@@ -888,16 +885,16 @@ show_ui_settings_menu = function(selected)
             MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT == 0 and 3600 or JIMAKU_MENU_TIMEOUT
             pop_menu(); show_ui_settings_menu(2)
         end},
-        {text = "3. Initial OSD Messages", hint = opts.initial_osd_messages and "✓ Enabled" or "✗ Disabled", action = function()
-            opts.initial_osd_messages = not opts.initial_osd_messages
+        {text = "3. Initial OSD Messages", hint = INITIAL_OSD_MESSAGES and "✓ Enabled" or "✗ Disabled", action = function()
+            INITIAL_OSD_MESSAGES = not INITIAL_OSD_MESSAGES
             pop_menu(); show_ui_settings_menu(3)
         end},
-        {text = "4. Font Size: " .. opts.font_size, action = function()
-            if opts.font_size == 12 then opts.font_size = 16
-            elseif opts.font_size == 16 then opts.font_size = 20
-            elseif opts.font_size == 20 then opts.font_size = 24
-            elseif opts.font_size == 24 then opts.font_size = 28
-            else opts.font_size = 12 end
+        {text = "4. Font Size: " .. JIMAKU_FONT_SIZE, action = function()
+            if JIMAKU_FONT_SIZE == 12 then JIMAKU_FONT_SIZE = 16
+            elseif JIMAKU_FONT_SIZE == 16 then JIMAKU_FONT_SIZE = 20
+            elseif JIMAKU_FONT_SIZE == 20 then JIMAKU_FONT_SIZE = 24
+            elseif JIMAKU_FONT_SIZE == 24 then JIMAKU_FONT_SIZE = 28
+            else JIMAKU_FONT_SIZE = 12 end
             pop_menu(); show_ui_settings_menu(4)
         end},
         {text = "0. Back to Settings", action = pop_menu},
@@ -907,7 +904,7 @@ end
 
 -- Filter Settings Submenu
 show_filter_settings_menu = function(selected)
-    local signs_status = opts.hide_signs_only and "✓ Hidden" or "✗ Shown"
+    local signs_status = JIMAKU_HIDE_SIGNS_ONLY and "✓ Hidden" or "✗ Shown"
     local enabled_groups = {}
     for _, g in ipairs(JIMAKU_PREFERRED_GROUPS) do
         if g.enabled then table.insert(enabled_groups, g.name) end
@@ -916,7 +913,7 @@ show_filter_settings_menu = function(selected)
     
     local items = {
         {text = "1. Hide Signs Only Subs", hint = signs_status, action = function()
-            opts.hide_signs_only = not opts.hide_signs_only
+            JIMAKU_HIDE_SIGNS_ONLY = not JIMAKU_HIDE_SIGNS_ONLY
             pop_menu(); show_filter_settings_menu(1)
         end},
         {text = "2. Preferred Groups  →", hint = groups_str, action = function()
@@ -1003,13 +1000,28 @@ debug_log = function(message, is_error)
     end
     
     -- Print to terminal if not suppressed
-    local should_log = not opts.log_only_errors or is_error
+    local should_log = not LOG_ONLY_ERRORS or is_error
     if should_log then
         print(log_msg:gsub("\n", ""))
     end
 end
 
 -- Load Jimaku API key from file
+load_jimaku_api_key = function()
+    local f = io.open(JIMAKU_API_KEY_FILE, "r")
+    if f then
+        local key = f:read("*l")
+        f:close()
+        if key and key:match("%S") then
+            JIMAKU_API_KEY = key:match("^%s*(.-)%s*$")  -- Trim whitespace
+            debug_log("Jimaku API key loaded from: " .. JIMAKU_API_KEY_FILE)
+            return true
+        end
+    end
+    debug_log("Jimaku API key not found. Create " .. JIMAKU_API_KEY_FILE .. " with your API key.", true)
+    return false
+end
+
 -- Create subtitle cache directory if it doesn't exist
 local function ensure_subtitle_cache()
     if STANDALONE_MODE then
@@ -1810,7 +1822,7 @@ end
 
 -- Search Jimaku for subtitle entry by AniList ID
 local function search_jimaku_subtitles(anilist_id)
-    if not opts.jimaku_api_key or opts.jimaku_api_key == "" then
+    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
         debug_log("Jimaku API key not configured - skipping subtitle search", false)
         return nil
     end
@@ -1823,7 +1835,7 @@ local function search_jimaku_subtitles(anilist_id)
     
     local args = {
         "curl", "-s", "-X", "GET",
-        "-H", "Authorization: " .. opts.jimaku_api_key,
+        "-H", "Authorization: " .. JIMAKU_API_KEY,
         search_url
     }
     
@@ -1866,7 +1878,7 @@ fetch_all_episode_files = function(entry_id)
     
     local args = {
         "curl", "-s", "-X", "GET",
-        "-H", "Authorization: " .. opts.jimaku_api_key,
+        "-H", "Authorization: " .. JIMAKU_API_KEY,
         files_url
     }
     
@@ -2036,7 +2048,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             local priority_score = 0
             
             -- Filter out "Signs Only" if enabled
-            if opts.hide_signs_only then
+            if JIMAKU_HIDE_SIGNS_ONLY then
                 local lower_name = file.name:lower()
                 if lower_name:match("signs") or lower_name:match("songs") or file.size < 5000 then
                     -- Skip if it's very likely just signs (usually < 5KB)
@@ -2269,8 +2281,8 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
     
     -- Determine how many to download
     local max_downloads = #matched_files
-    if opts.max_subs ~= "all" and type(opts.max_subs) == "number" then
-        max_downloads = math.min(opts.max_subs, #matched_files)
+    if JIMAKU_MAX_SUBS ~= "all" and type(JIMAKU_MAX_SUBS) == "number" then
+        max_downloads = math.min(JIMAKU_MAX_SUBS, #matched_files)
     end
     
     debug_log(string.format("Downloading %d of %d matched subtitle(s)...", max_downloads, #matched_files))
@@ -2288,7 +2300,7 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
         -- Download the file
         local download_args = {
             "curl", "-s", "-L", "-o", subtitle_path,
-            "-H", "Authorization: " .. opts.jimaku_api_key,
+            "-H", "Authorization: " .. JIMAKU_API_KEY,
             subtitle_file.url
         }
         
@@ -2950,13 +2962,8 @@ if not STANDALONE_MODE then
     -- Create subtitle cache directory
     ensure_subtitle_cache()
     
-    -- Validate API key
-    if not opts.jimaku_api_key or opts.jimaku_api_key == "" then
-        debug_log("Jimaku API key not configured. Set it in script-opts/jimaku.conf", true)
-        debug_log("Example: jimaku_api_key=your_api_key_here", true)
-    else
-        debug_log("Jimaku API key configured")
-    end
+    -- Load Jimaku API key
+    load_jimaku_api_key()
     
     -- Keybind 'A' to trigger the search
     mp.add_key_binding("A", "anilist-search", search_anilist)
@@ -3006,7 +3013,7 @@ if not STANDALONE_MODE then
     end)
     
     -- Auto-download subtitles on file load if enabled
-    if opts.auto_download then
+    if JIMAKU_AUTO_DOWNLOAD then
         mp.register_event("file-loaded", function()
             -- Reset menu state on new file
             menu_state.current_match = nil
