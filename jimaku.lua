@@ -606,7 +606,6 @@ show_subtitle_browser = function()
         
         table.insert(items, {
             text = item_text,
-            hint = string.format("{\\fs12}%.1f KB", file.size / 1024),
             action = function() download_selected_subtitle_action(file) end
         })
     end
