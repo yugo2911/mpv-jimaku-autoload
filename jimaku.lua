@@ -520,14 +520,51 @@ show_subtitle_browser = function()
     -- If page is nil, jump to current episode
     if not menu_state.browser_page or menu_state.browser_page < 1 then
         menu_state.browser_page = 1
-        local target_ep = menu_state.target_episode
-        local target_season = menu_state.target_season
+        
+        -- Get target episode from current_match
+        local target_ep = menu_state.current_match and menu_state.current_match.episode
+        local target_season = menu_state.current_match and menu_state.current_match.season
+        
+        -- Calculate cumulative episode for matching (like download logic does)
+        local target_cumulative = nil
+        if target_ep and menu_state.seasons_data then
+            if target_season and target_season > 1 then
+                local cumulative = 0
+                for season_idx = 1, target_season - 1 do
+                    if menu_state.seasons_data[season_idx] then
+                        cumulative = cumulative + menu_state.seasons_data[season_idx].eps
+                    end
+                end
+                target_cumulative = cumulative + target_ep
+            else
+                target_cumulative = target_ep
+            end
+        end
         
         if target_ep then
             for i, file in ipairs(filtered_files) do
                 local s, e = parse_jimaku_filename(file.name)
-                -- Simple match: if episode matches (and season if present)
+                local matched = false
+                
+                -- Match 1: Direct season/episode match
                 if e == target_ep and (not s or not target_season or s == target_season) then
+                    matched = true
+                end
+                
+                -- Match 2: Japanese absolute episode (第222話)
+                if not matched and target_cumulative then
+                    local japanese_ep = file.name:match("第(%d+)[話回]")
+                    if japanese_ep and tonumber(japanese_ep) == target_cumulative then
+                        matched = true
+                    end
+                end
+                
+                -- Match 3: Episode number matches cumulative (for files with just E222)
+                if not matched and target_cumulative and e == target_cumulative then
+                    matched = true
+                end
+                
+                if matched then
                     menu_state.browser_page = math.ceil(i / menu_state.items_per_page)
                     break
                 end
