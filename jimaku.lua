@@ -41,7 +41,8 @@ local LOG_ONLY_ERRORS = false
 local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
 local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
 local JIMAKU_PREFERRED_GROUPS = {   -- Preferred loaded filename add wanted pattern SDH, NanakoRaws etc.. order matters
-
+    
+    {name = "LoliHouse", enabled = true},
     {name = "WEBRip", enabled = true},
     {name = "WEB-DL", enabled = true},
     {name = "WEB", enabled = true},
