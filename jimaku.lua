@@ -995,12 +995,17 @@ debug_log = function(message, is_error)
     local log_msg = string.format("%s %s%s\n", timestamp, prefix, message)
     
     local target_log = STANDALONE_MODE and PARSER_LOG_FILE or LOG_FILE
-    local f = io.open(target_log, "a")
-    if f then
-        f:write(log_msg)
-        f:close()
+
+    if LOG_FILE_HANDLE then
+        pcall(function() LOG_FILE_HANDLE:write(log_msg) end)
+    else
+        local f = io.open(target_log, "a")
+        if f then
+            f:write(log_msg)
+            f:close()
+        end
     end
-    
+
     -- Print to terminal if not suppressed
     local should_log = not LOG_ONLY_ERRORS or is_error
     if should_log then
@@ -1735,7 +1740,13 @@ end
 
 local function test_parser(input_file)
     local test_file = input_file or TEST_FILE
-    
+    -- Open parser log once to minimize IO overhead during testing
+    if PARSER_LOG_FILE then
+        local hf = io.open(PARSER_LOG_FILE, "w")
+        if hf then hf:close() end
+        LOG_FILE_HANDLE = io.open(PARSER_LOG_FILE, "a")
+    end
+
     debug_log("=== PARSER TEST MODE STARTED ===")
     debug_log("Reading from: " .. test_file)
     
@@ -1774,6 +1785,12 @@ local function test_parser(input_file)
     debug_log(string.format("Total: %d | Success: %d | Failures: %d", #lines, #results, failures), failures > 0)
     debug_log("Results written to: " .. PARSER_LOG_FILE)
     
+    -- Close buffered log handle if opened
+    if LOG_FILE_HANDLE then
+        pcall(function() LOG_FILE_HANDLE:close() end)
+        LOG_FILE_HANDLE = nil
+    end
+
     return results, failures
 end
 
