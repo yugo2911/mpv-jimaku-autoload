@@ -1285,6 +1285,9 @@ end
 local function clean_parenthetical(title)
     if not title then return title end
     
+    -- Remove resolution tags: (1080p), (720p), (480p), etc.
+    title = title:gsub("%s*%(%d%d%d%d?p%)%s*", " ")
+    
     -- Remove quality/format tags in parentheses (more aggressive matching)
     -- Handles: (BD ...), (DVD ...), (WEB ...), (Remux ...), etc.
     title = title:gsub("%s*%([^)]*BD[^)]*%)%s*", " ")
