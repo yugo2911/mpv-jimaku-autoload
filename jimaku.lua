@@ -1292,6 +1292,9 @@ local function clean_parenthetical(title)
     title = title:gsub("%s*%(Blu%-ray[^%)]*%)%s*", " ")
     title = title:gsub("%s*%(Remux[^%)]*%)%s*", " ")
     
+    -- Remove language codes in parentheses: (JP), (EN), (KR), (US), etc.
+    title = title:gsub("%s*%([A-Z][A-Z]%)%s*", " ")
+    
     -- Remove RECAP tags
     title = title:gsub("%s*%(RECAP%)%s*", " ")
     title = title:gsub("%s*%[RECAP%]%s*", " ")
@@ -1598,13 +1601,22 @@ local function parse_filename(filename)
         end
     end
     
-    -- Method 2: "S2" suffix (e.g., "Oshi no Ko S3")
+    -- Method 2: "S2" suffix (e.g., "Oshi no Ko S3" or "Dragon Raja S2 (JP)")
     if not result.season and result.title then
+        -- Try at end first (most common)
         local s_num = result.title:match("%s[Ss](%d+)$")
         if s_num then
             result.season = tonumber(s_num)
             result.title = result.title:gsub("%s[Ss]%d+$", "")
-            debug_log(string.format("Detected Season %d from 'S' suffix", result.season))
+            debug_log(string.format("Detected Season %d from 'S' suffix (at end)", result.season))
+        else
+            -- Try in middle of title (before other tags like JP, EN, etc.)
+            s_num = result.title:match("%s[Ss](%d+)%s")
+            if s_num then
+                result.season = tonumber(s_num)
+                result.title = result.title:gsub("%s[Ss]%d+%s", " ")
+                debug_log(string.format("Detected Season %d from 'S' suffix (mid-title)", result.season))
+            end
         end
     end
     
