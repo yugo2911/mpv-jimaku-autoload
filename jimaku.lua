@@ -1286,9 +1286,6 @@ end
 local function clean_parenthetical(title)
     if not title then return title end
     
-    -- Remove parenthetical year/date info: (2025), (2024)
-    title = title:gsub("%s*%(20%d%d%)%s*", " ")
-    
     -- Remove quality/format tags in parentheses
     title = title:gsub("%s*%(BD[^%)]*%)%s*", " ")
     title = title:gsub("%s*%(DVD[^%)]*%)%s*", " ")
@@ -1638,22 +1635,32 @@ local function parse_filename(filename)
         if trailing then
             local num = tonumber(trailing)
             -- VERY conservative: only 2-6, avoid numeric titles, and check if preceded by season-like word
-            local before_num = result.title:match("(%w+)%s+%d+$")
-            local is_season_context = before_num and (
-                before_num:lower():match("season") or
-                before_num:lower():match("part") or
-                before_num:lower():match("cour")
+            local before_num = result.title:match("(.-)%s%d+$") or ""
+            local before_word = before_num:match("(%w+)%s*$")
+            local is_season_context = before_word and (
+                before_word:lower():match("season") or
+                before_word:lower():match("part") or
+                before_word:lower():match("cour")
             )
-            
-            if num and num >= 2 and num <= 6 and 
+
+            -- Skip if title has a dash immediately before number (e.g. "Title - 09")
+            local has_dash_before = before_num:match("%-%s*$")
+
+            -- Also skip if an episode was already detected earlier (don't infer season)
+            if result.episode then
+                debug_log("Skipping trailing-number season detection because episode already parsed")
+            elseif num and num >= 2 and num <= 6 and 
                not result.title:match("^%d") and  -- Title doesn't start with number
                not result.title:match("%d/%d") and  -- Not a fraction like "22/7"
-               not is_season_context then  -- NOT preceded by season-related word
+               not is_season_context and 
+               not has_dash_before then  -- NOT preceded by season-related word or dash
                 result.season = num
                 result.title = result.title:gsub("%s%d+$", "")
                 debug_log(string.format("Detected Season %d from trailing number (low confidence)", num))
             elseif is_season_context then
                 debug_log(string.format("Skipped trailing number %d - appears to be part of title", num))
+            elseif has_dash_before then
+                debug_log(string.format("Skipped trailing number %d - prefixed by dash, likely episode", num))
             end
         end
     end
