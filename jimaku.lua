@@ -165,7 +165,7 @@ render_menu_osd = function()
     local style_normal = string.format("{\\fs%d\\c&HFFFFFF&}", JIMAKU_FONT_SIZE)
     local style_disabled = string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE)
     local style_footer = string.format("{\\fs%d\\c&HCCCCCC&}", JIMAKU_FONT_SIZE - 2)
-    local style_dim = string.format("{\\fs%d\\c&H888888&}", JIMAKU_FONT_SIZE - 4)
+    local style_dim = string.format("{\\fs%d\\c&H888888&}", JIMAKU_FONT_SIZE - 6)
     
     -- Build menu
     ass = ass .. style_header .. title .. "\\N"
@@ -842,11 +842,11 @@ show_ui_settings_menu = function(selected)
             pop_menu(); show_ui_settings_menu(3)
         end},
         {text = "4. Font Size: " .. JIMAKU_FONT_SIZE, action = function()
-            if JIMAKU_FONT_SIZE == 16 then JIMAKU_FONT_SIZE = 20
+            if JIMAKU_FONT_SIZE == 12 then JIMAKU_FONT_SIZE = 16
+            elseif JIMAKU_FONT_SIZE == 16 then JIMAKU_FONT_SIZE = 20
             elseif JIMAKU_FONT_SIZE == 20 then JIMAKU_FONT_SIZE = 24
             elseif JIMAKU_FONT_SIZE == 24 then JIMAKU_FONT_SIZE = 28
-            elseif JIMAKU_FONT_SIZE == 28 then JIMAKU_FONT_SIZE = 32
-            else JIMAKU_FONT_SIZE = 16 end
+            else JIMAKU_FONT_SIZE = 12 end
             pop_menu(); show_ui_settings_menu(4)
         end},
         {text = "0. Back to Settings", action = pop_menu},
