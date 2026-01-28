@@ -1625,7 +1625,7 @@ local function parse_media_title(filename)
     -- Pattern D: Dash with number (MEDIUM confidence) - IMPROVED for version tags and high episodes
     if not result.episode then
         -- Try to match episode WITH version tag (e.g., "01v2")
-        local t, ep, version = content:match("^(.-)%s*[%-%–—]%s*(%d+)(v%d+)")
+            local t, ep, version = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)(v%d+)")
         if t and ep then
             result.title = t
             result.episode = ep
@@ -1633,9 +1633,9 @@ local function parse_media_title(filename)
             debug_log(string.format("Detected episode %s with version tag '%s'", ep, version))
         else
             -- Standard dash pattern without version - SUPPORTS HIGH EPISODE NUMBERS
-            local t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+)%s*[%[%(%s]")
+            local t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)%s*[%[%(%s]")
             if not t2 then
-                t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+)$")
+                t2, ep2 = content:match("^(.-)%s*[%-%–—]%s*(%d+%.?%d*)$")
             end
             if t2 and ep2 then
                 local ep_num = tonumber(ep2)
@@ -1651,9 +1651,9 @@ local function parse_media_title(filename)
     
     -- Pattern E: Space with number at end (LOW-MEDIUM confidence) - SUPPORTS HIGH EPISODES
     if not result.episode then
-        local t, ep = content:match("^(.-)%s+(%d+)%s*%[")
+        local t, ep = content:match("^(.-)%s+(%d+%.?%d*)%s*%[")
         if not t then
-            t, ep = content:match("^(.-)%s+(%d+)$")
+            t, ep = content:match("^(.-)%s+(%d+%.?%d*)$")
         end
         if t and ep then
             local ep_num = tonumber(ep)
