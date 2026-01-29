@@ -3021,11 +3021,30 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
     
     -- PRIORITY 3: Cumulative Episode Calculation (MEDIUM weight)
     -- If episode number exceeds first result's count, try to find correct season
+    -- BUT: If first result is clearly the right show (title matches) and has unknown episode count,
+    -- don't trigger cumulative - just use it as-is
+    local first_result_unknown_eps = (selected.episodes == nil or selected.episodes == 0)
+    local first_result_title_matches = check_title_similarity(selected)
+    
     if not has_explicit_season and episode_num > (selected.episodes or 0) then
+        -- If first result clearly matches title but has unknown episode count, use it anyway
+        if first_result_unknown_eps and first_result_title_matches then
+            debug_log("First result has unknown episode count but title matches - using it (skipping cumulative)")
+            match_method = "title_match_unknown_eps"
+            match_confidence = "medium"
+            return selected, actual_episode, actual_season, seasons, match_method, match_confidence
+        end
+        
         debug_log("Episode number exceeds S1 count - attempting cumulative calculation")
         
-        -- Build season list
+        -- Build season list (only include entries with title similarity)
         for i, media in ipairs(results) do
+            -- Skip entries that don't match the search title at all
+            if not check_title_similarity(media) then
+                debug_log(string.format("  Skipping unrelated entry: %s", media.title.romaji or "N/A"))
+                goto skip_media
+            end
+            
             if media.format == "TV" and media.episodes then
                 local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
                 for _, syn in ipairs(media.synonyms or {}) do
@@ -3055,6 +3074,8 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
                     seasons[3] = {media = media, eps = media.episodes, name = media.title.romaji}
                 end
             end
+            
+            ::skip_media::
         end
         
         -- Calculate which season this episode belongs to
@@ -3359,6 +3380,16 @@ search_anilist = function(is_auto)
                 selected,  -- Pass full AniList entry for verification
                 is_auto
             )
+        else
+            -- AniList match found but no Jimaku entry exists
+            local no_subs_msg = string.format(
+                "No subtitles on Jimaku for:\n%s (AniList ID: %d)\n\nYou can upload subtitles at jimaku.cc",
+                selected.title.romaji,
+                selected.id
+            )
+            debug_log(string.format("No Jimaku entry found for '%s' (ID: %d)", 
+                selected.title.romaji, selected.id), true)
+            conditional_osd(no_subs_msg, 7, is_auto)
         end
     else
         debug_log("FAILURE: No matches found for " .. parsed.title, true)
