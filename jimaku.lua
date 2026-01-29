@@ -1023,26 +1023,52 @@ end
 
 -- Cache Submenu
 show_cache_menu = function()
+    -- Calculate current cache sizes
+    local function count_table(tbl)
+        local count = 0
+        for _ in pairs(tbl) do count = count + 1 end
+        return count
+    end
+    
+    local anilist_count = count_table(ANILIST_CACHE)
+    local jimaku_count = count_table(JIMAKU_CACHE)
+    local episode_count = count_table(EPISODE_CACHE)
+    
     local items = {
-        {text = "1. Clear Subtitle Cache", action = function()
-            -- Placeholder: requires OS command to delete files in SUBTITLE_CACHE_DIR
-            mp.osd_message("Clearing subtitle cache...", 2)
+        {text = "1. Show Cache Stats", action = function()
+            local stats = string.format(
+                "Cache Statistics:\\N" ..
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
+                "AniList Entries: %d\\N" ..
+                "Jimaku Entries: %d\\N" ..
+                "Cached File Lists: %d\\N" ..
+                "Cache Directory: %s",
+                anilist_count,
+                jimaku_count,
+                episode_count,
+                SUBTITLE_CACHE_DIR
+            )
+            mp.osd_message(stats, 8)
+        end},
+        {text = "2. Clear Subtitle Cache", action = function()
+            clear_subtitle_cache()
             pop_menu()
         end},
-        {text = "2. Clear Memory Episode Cache", action = function()
-            episode_cache = {}
-            mp.osd_message("Memory cache cleared", 2)
+        {text = "3. Clear Memory Episode Cache", action = function()
+            EPISODE_CACHE = {}
+            EPISODE_CACHE_KEYS = {}
+            mp.osd_message("Memory episode cache cleared", 2)
             pop_menu()
         end},
-        {text = "3. Clear AniList Search Cache", action = function()
-            anilist_cache = {}
-            save_anilist_cache()
+        {text = "4. Clear AniList Search Cache", action = function()
+            ANILIST_CACHE = {}
+            save_ANILIST_CACHE()
             mp.osd_message("AniList cache cleared", 2)
             pop_menu()
         end},
-        {text = "4. Clear Jimaku Entry Cache", action = function()
-            jimaku_cache = {}
-            save_jimaku_cache()
+        {text = "5. Clear Jimaku Entry Cache", action = function()
+            JIMAKU_CACHE = {}
+            save_JIMAKU_CACHE()
             mp.osd_message("Jimaku cache cleared", 2)
             pop_menu()
         end},
@@ -1117,18 +1143,18 @@ local function count_table_entries(tbl)
     return count
 end
 
--- Improved load_anilist_cache with proper entry counting
-local function load_anilist_cache()
+-- Improved load_ANILIST_CACHE with proper entry counting
+local function load_ANILIST_CACHE()
     if STANDALONE_MODE then 
         debug_log("Cache Debug: STANDALONE_MODE - returning empty cache")
-        anilist_cache = {}
+        ANILIST_CACHE = {}
         return 
     end
     
     local f = io.open(ANILIST_CACHE_FILE, "r")
     if not f then
         debug_log("AniList cache file not found - will create on first search")
-        anilist_cache = {}
+        ANILIST_CACHE = {}
         return
     end
     
@@ -1137,31 +1163,31 @@ local function load_anilist_cache()
     
     if not content or content == "" then
         debug_log("AniList cache file is empty")
-        anilist_cache = {}
+        ANILIST_CACHE = {}
         return
     end
     
     local ok, data = pcall(utils.parse_json, content)
     if not ok then
         debug_log("Failed to parse AniList cache file (corrupted JSON)", true)
-        anilist_cache = {}
+        ANILIST_CACHE = {}
         return
     end
     
     if not data or type(data) ~= "table" then
         debug_log("AniList cache data is not a valid table")
-        anilist_cache = {}
+        ANILIST_CACHE = {}
         return
     end
     
-    anilist_cache = data
-    local entry_count = count_table_entries(anilist_cache)
+    ANILIST_CACHE = data
+    local entry_count = count_table_entries(ANILIST_CACHE)
     debug_log(string.format("Loaded AniList cache with %d entries (keys)", entry_count))
     
     -- Log some sample cache keys for debugging
     if entry_count > 0 then
         local sample_keys = {}
-        for key, _ in pairs(anilist_cache) do
+        for key, _ in pairs(ANILIST_CACHE) do
             table.insert(sample_keys, key)
             if #sample_keys >= 3 then break end
         end
@@ -1169,18 +1195,18 @@ local function load_anilist_cache()
     end
 end
 
--- Improved load_jimaku_cache with proper entry counting
-local function load_jimaku_cache()
+-- Improved load_JIMAKU_CACHE with proper entry counting
+local function load_JIMAKU_CACHE()
     if STANDALONE_MODE then 
         debug_log("Cache Debug: STANDALONE_MODE - returning empty cache")
-        jimaku_cache = {}
+        JIMAKU_CACHE = {}
         return 
     end
     
     local f = io.open(JIMAKU_CACHE_FILE, "r")
     if not f then
         debug_log("Jimaku cache file not found - will create on first search")
-        jimaku_cache = {}
+        JIMAKU_CACHE = {}
         return
     end
     
@@ -1189,31 +1215,31 @@ local function load_jimaku_cache()
     
     if not content or content == "" then
         debug_log("Jimaku cache file is empty")
-        jimaku_cache = {}
+        JIMAKU_CACHE = {}
         return
     end
     
     local ok, data = pcall(utils.parse_json, content)
     if not ok then
         debug_log("Failed to parse Jimaku cache file (corrupted JSON)", true)
-        jimaku_cache = {}
+        JIMAKU_CACHE = {}
         return
     end
     
     if not data or type(data) ~= "table" then
         debug_log("Jimaku cache data is not a valid table")
-        jimaku_cache = {}
+        JIMAKU_CACHE = {}
         return
     end
     
-    jimaku_cache = data
-    local entry_count = count_table_entries(jimaku_cache)
+    JIMAKU_CACHE = data
+    local entry_count = count_table_entries(JIMAKU_CACHE)
     debug_log(string.format("Loaded Jimaku cache with %d entries (keys)", entry_count))
     
     -- Log some sample cache keys for debugging
     if entry_count > 0 then
         local sample_keys = {}
-        for key, _ in pairs(jimaku_cache) do
+        for key, _ in pairs(JIMAKU_CACHE) do
             table.insert(sample_keys, key)
             if #sample_keys >= 3 then break end
         end
@@ -1221,14 +1247,14 @@ local function load_jimaku_cache()
     end
 end
 
--- Improved save_anilist_cache with proper entry counting
-local function save_anilist_cache()
+-- Improved save_ANILIST_CACHE with proper entry counting
+local function save_ANILIST_CACHE()
     if STANDALONE_MODE then 
         debug_log("Cache Debug: STANDALONE_MODE - skipping save")
         return 
     end
     
-    local entry_count = count_table_entries(anilist_cache)
+    local entry_count = count_table_entries(ANILIST_CACHE)
     debug_log(string.format("Saving AniList cache with %d entries", entry_count))
     
     if entry_count == 0 then
@@ -1241,7 +1267,7 @@ local function save_anilist_cache()
         return
     end
     
-    local ok, json = pcall(utils.format_json, anilist_cache)
+    local ok, json = pcall(utils.format_json, ANILIST_CACHE)
     if not ok then
         debug_log("Failed to serialize AniList cache to JSON", true)
         f:close()
@@ -1254,14 +1280,14 @@ local function save_anilist_cache()
     debug_log(string.format("Successfully saved AniList cache to %s", ANILIST_CACHE_FILE))
 end
 
--- Improved save_jimaku_cache with proper entry counting
-local function save_jimaku_cache()
+-- Improved save_JIMAKU_CACHE with proper entry counting
+local function save_JIMAKU_CACHE()
     if STANDALONE_MODE then 
         debug_log("Cache Debug: STANDALONE_MODE - skipping save")
         return 
     end
     
-    local entry_count = count_table_entries(jimaku_cache)
+    local entry_count = count_table_entries(JIMAKU_CACHE)
     debug_log(string.format("Saving Jimaku cache with %d entries", entry_count))
     
     if entry_count == 0 then
@@ -1274,7 +1300,7 @@ local function save_jimaku_cache()
         return
     end
     
-    local ok, json = pcall(utils.format_json, jimaku_cache)
+    local ok, json = pcall(utils.format_json, JIMAKU_CACHE)
     if not ok then
         debug_log("Failed to serialize Jimaku cache to JSON", true)
         f:close()
@@ -2136,8 +2162,8 @@ local function search_jimaku_subtitles(anilist_id)
     
     -- Check cache first
     local cache_key = tostring(anilist_id)
-    if not STANDALONE_MODE and jimaku_cache[cache_key] then
-        local cache_entry = jimaku_cache[cache_key]
+    if not STANDALONE_MODE and JIMAKU_CACHE[cache_key] then
+        local cache_entry = JIMAKU_CACHE[cache_key]
         local cache_age = os.time() - cache_entry.timestamp
         if cache_age < 3600 then  -- Cache valid for 1 hour
             debug_log(string.format("Using cached Jimaku entry for AniList ID %d (%d seconds old)", 
@@ -2146,7 +2172,7 @@ local function search_jimaku_subtitles(anilist_id)
         else
             debug_log(string.format("Jimaku cache expired for AniList ID %d (%d seconds old)", 
                 anilist_id, cache_age))
-            jimaku_cache[cache_key] = nil
+            JIMAKU_CACHE[cache_key] = nil
         end
     end
     
@@ -2181,12 +2207,12 @@ local function search_jimaku_subtitles(anilist_id)
     debug_log(string.format("Found Jimaku entry: %s (ID: %d)", entries[1].name, entries[1].id))
     
     -- Cache the result
-    jimaku_cache[cache_key] = {
+    JIMAKU_CACHE[cache_key] = {
         entry = entries[1],
         timestamp = os.time()
     }
     if not STANDALONE_MODE then
-        save_jimaku_cache()
+        save_JIMAKU_CACHE()
     end
     debug_log(string.format("Cached Jimaku entry for AniList ID %d", anilist_id))
     
@@ -2196,11 +2222,11 @@ end
 -- Fetch ALL subtitle files for an entry (no episode filter)
 fetch_all_episode_files = function(entry_id)
     -- Check cache first
-    if episode_cache[entry_id] then
-        local cache_age = os.time() - episode_cache[entry_id].timestamp
+    if EPISODE_CACHE[entry_id] then
+        local cache_age = os.time() - EPISODE_CACHE[entry_id].timestamp
         if cache_age < 300 then  -- Cache valid for 5 minutes
-            debug_log(string.format("Using cached file list for entry %d (%d files)", entry_id, #episode_cache[entry_id].files))
-            return episode_cache[entry_id].files
+            debug_log(string.format("Using cached file list for entry %d (%d files)", entry_id, #EPISODE_CACHE[entry_id].files))
+            return EPISODE_CACHE[entry_id].files
         end
     end
     
@@ -2235,7 +2261,7 @@ fetch_all_episode_files = function(entry_id)
     debug_log(string.format("Retrieved %d total subtitle files", #files))
     
     -- Cache the result
-    episode_cache[entry_id] = {
+    EPISODE_CACHE[entry_id] = {
         files = files,
         timestamp = os.time()
     }
@@ -3146,8 +3172,8 @@ search_anilist = function(is_auto)
 
     -- Check cache first
     local cache_key = search_title:lower()
-    if not STANDALONE_MODE and anilist_cache[cache_key] then
-        local cache_entry = anilist_cache[cache_key]
+    if not STANDALONE_MODE and ANILIST_CACHE[cache_key] then
+        local cache_entry = ANILIST_CACHE[cache_key]
         local cache_age = os.time() - cache_entry.timestamp
         if cache_age < 86400 then  -- Cache valid for 24 hours
             debug_log(string.format("Using cached AniList results for '%s' (%d seconds old)", 
@@ -3157,13 +3183,13 @@ search_anilist = function(is_auto)
         else
             debug_log(string.format("AniList cache expired for '%s' (%d seconds old)", 
                 search_title, cache_age))
-            anilist_cache[cache_key] = nil
+            ANILIST_CACHE[cache_key] = nil
         end
     end
 
     -- Make API request if not cached or cache expired
     local data
-    if not anilist_cache[cache_key] then
+    if not ANILIST_CACHE[cache_key] then
         local query = [[
         query ($search: String) {
           Page (page: 1, perPage: 15) {
@@ -3186,17 +3212,17 @@ search_anilist = function(is_auto)
         
         -- Cache the results
         if data and data.Page and data.Page.media then
-            anilist_cache[cache_key] = {
+            ANILIST_CACHE[cache_key] = {
                 results = data.Page.media,
                 timestamp = os.time()
             }
             if not STANDALONE_MODE then
-                save_anilist_cache()
+                save_ANILIST_CACHE()
             end
             debug_log(string.format("Cached AniList results for '%s'", search_title))
         end
     else
-        data = {Page = {media = anilist_cache[cache_key].results}}
+        data = {Page = {media = ANILIST_CACHE[cache_key].results}}
     end
     
     -- FALLBACK: If no results, try alternative searches
@@ -3348,8 +3374,8 @@ if not STANDALONE_MODE then
     load_jimaku_api_key()
     
     -- Load caches
-    load_anilist_cache()
-    load_jimaku_cache()
+    load_ANILIST_CACHE()
+    load_JIMAKU_CACHE()
     
     -- Keybind 'A' to trigger the search
     mp.add_key_binding("A", "anilist-search", search_anilist)
