@@ -67,9 +67,9 @@ JIMAKU_PREFERRED_GROUPS = {
 }
 
 -- Runtime Caches
-episode_cache = {}
-anilist_cache = {}
-jimaku_cache = {}
+EPISODE_CACHE = {}
+ANILIST_CACHE = {}
+JIMAKU_CACHE = {}
 
 -- 5. DEBUG LOGGING FUNCTION
 -- Use this to track cache hits/misses
