@@ -2271,31 +2271,6 @@ end
 
 -- Extract all possible title variations from AniList entry
 local function extract_title_variations(anilist_entry)
-    -- Helper: Check if text is in a useful script (Latin, Japanese, common punctuation)
-    local function is_useful_script(text)
-        if not text or text == "" then return false end
-        
-        local useful_chars = 0
-        local total_chars = 0
-        
-        for char in text:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-            total_chars = total_chars + 1
-            local byte = char:byte()
-            
-            if byte < 128 then  -- ASCII
-                useful_chars = useful_chars + 1
-            elseif char:match("[ぁ-ゔ]") then  -- Hiragana
-                useful_chars = useful_chars + 1
-            elseif char:match("[ァ-ヴ]") then  -- Katakana
-                useful_chars = useful_chars + 1
-            elseif char:match("[一-龯]") then  -- Kanji
-                useful_chars = useful_chars + 1
-            end
-        end
-        
-        return total_chars > 0 and (useful_chars / total_chars) >= 0.5
-    end
-    
     local variations = {}
     
     -- Add all title forms
@@ -2311,12 +2286,10 @@ local function extract_title_variations(anilist_entry)
         end
     end
     
-    -- Add synonyms (filter out Thai, Chinese, Korean, Arabic, etc.)
+    -- Add synonyms
     if anilist_entry.synonyms then
         for _, syn in ipairs(anilist_entry.synonyms) do
-            if is_useful_script(syn) then
-                table.insert(variations, syn:lower())
-            end
+            table.insert(variations, syn:lower())
         end
     end
     
@@ -2908,36 +2881,6 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
     local special_weight = has_special_indicator and 5 or 0
     
     -- NEW: Check title similarity to prevent completely wrong matches
-    -- Helper: Check if text is in a useful script (Latin, Japanese, common punctuation)
-    -- Filters out: Thai, Chinese (Simplified/Traditional), Korean, Arabic, Cyrillic, etc.
-    local function is_useful_script(text)
-        if not text or text == "" then return false end
-        
-        -- Count characters in useful ranges
-        local useful_chars = 0
-        local total_chars = 0
-        
-        for char in text:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-            total_chars = total_chars + 1
-            local byte = char:byte()
-            
-            -- Latin (ASCII + extended), Japanese (Hiragana, Katakana, Kanji), common symbols
-            -- Allow: A-Z, a-z, 0-9, Japanese (0x3000-0x30FF, 0x4E00-0x9FFF), punctuation
-            if byte < 128 then  -- ASCII (Latin + numbers + basic punctuation)
-                useful_chars = useful_chars + 1
-            elseif char:match("[ぁ-ゔ]") then  -- Hiragana
-                useful_chars = useful_chars + 1
-            elseif char:match("[ァ-ヴ]") then  -- Katakana
-                useful_chars = useful_chars + 1
-            elseif char:match("[一-龯]") then  -- Kanji (CJK Unified Ideographs)
-                useful_chars = useful_chars + 1
-            end
-        end
-        
-        -- If at least 50% of characters are in useful scripts, keep it
-        return total_chars > 0 and (useful_chars / total_chars) >= 0.5
-    end
-    
     local function check_title_similarity(media)
         local search_terms = parsed.title:lower():gsub("[%s%-%._]", "")
         local romaji = (media.title.romaji or ""):lower():gsub("[%s%-%._]", "")
@@ -2952,16 +2895,13 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
             end
         end
         
-        -- Check synonyms (filter out Thai, Chinese, Korean, Arabic, etc.)
+        -- Check synonyms
         if media.synonyms then
             for _, syn in ipairs(media.synonyms) do
-                -- Skip synonyms in non-useful scripts (Thai, Chinese, Korean, etc.)
-                if is_useful_script(syn) then
-                    local syn_clean = syn:lower():gsub("[%s%-%._]", "")
-                    for word in search_terms:gmatch("%w+") do
-                        if word:len() >= 3 and syn_clean:match(word) then
-                            return true
-                        end
+                local syn_clean = syn:lower():gsub("[%s%-%._]", "")
+                for word in search_terms:gmatch("%w+") do
+                    if word:len() >= 3 and syn_clean:match(word) then
+                        return true
                     end
                 end
             end
