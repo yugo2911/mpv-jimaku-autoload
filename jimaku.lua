@@ -2783,91 +2783,269 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
     end
 end
 
--- Helper to check if a file is a compressed archive
-is_archive_file = function(filename)
-    if not filename then return false end
-    local ext = filename:match("%.([^%.]+)$")
+-- ARCHIVE HANDLING FIX FOR jimaku.lua
+-- Replace the is_archive_file and handle_archive_file functions with these updated versions
+
+-------------------------------------------------------------------------------
+-- HELPER: Detect archive files
+-------------------------------------------------------------------------------
+is_archive_file = function(path)
+    local ext = path:match("%.([^%.]+)$")
     if not ext then return false end
     ext = ext:lower()
     return ext == "zip" or ext == "rar" or ext == "7z" or ext == "tar" or ext == "gz"
 end
 
--- Extract and load subtitles from an archive
-handle_archive_file = function(archive_path, default_flag)
-    debug_log("Handling archive: " .. archive_path)
-    
-    -- Create a unique extraction directory based on filename
-    local filename = archive_path:match("([^/\\%.]+)%.[^%.]+$") or "extracted"
-    local extract_dir = SUBTITLE_CACHE_DIR .. "/extracted_" .. filename .. "_" .. os.time()
-    
-    -- Create directory
-    if STANDALONE_MODE then
-        os.execute("mkdir -p \"" .. extract_dir .. "\"")
+-------------------------------------------------------------------------------
+-- HELPER: Escape path for shell commands (Windows and Unix)
+-------------------------------------------------------------------------------
+local function escape_path(path)
+    -- For Windows, wrap in quotes and escape any embedded quotes
+    if package.config:sub(1,1) == '\\' then
+        -- Windows
+        return '"' .. path:gsub('"', '\\"') .. '"'
     else
-        mp.command_native({
-            name = "subprocess",
-            playback_only = false,
-            args = {"mkdir", extract_dir}
-        })
+        -- Unix-like - escape spaces and special chars
+        return path:gsub('([%s%$%`%"%\\])', '\\%1')
+    end
+end
+
+-------------------------------------------------------------------------------
+-- HELPER: Recursively scan directory for subtitle files
+-------------------------------------------------------------------------------
+local function scan_for_subtitles(dir_path, max_depth)
+    max_depth = max_depth or 3  -- Prevent infinite recursion
+    if max_depth <= 0 then return {} end
+    
+    local subtitle_files = {}
+    local items = utils.readdir(dir_path, "all")
+    
+    if not items then
+        debug_log("Cannot read directory: " .. dir_path, true)
+        return subtitle_files
     end
     
-    -- Extract using tar (cross-platform)
-    -- Note: tar on Windows 10+ supports zip, 7z, rar (if libarchive is present), and tar
-    debug_log("Extracting to: " .. extract_dir)
-    local tar_args = {"tar", "-xf", archive_path, "-C", extract_dir}
-    
-    local extract_result
-    if STANDALONE_MODE then
-        local cmd = table.concat(tar_args, " ")
-        extract_result = {status = os.execute(cmd) and 0 or 1}
-    else
-        extract_result = mp.command_native({
-            name = "subprocess",
-            playback_only = false,
-            args = tar_args
-        })
-    end
-    
-    if extract_result.status == 0 then
-        debug_log("Extraction successful, scanning for subtitles...")
+    for _, item in ipairs(items) do
+        local full_path = dir_path .. "/" .. item
+        local ext = item:match("%.([^%.]+)$")
         
-        -- Scan extracted directory for subtitle files
-        local files = utils.readdir(extract_dir, "files")
-        local loaded_count = 0
-        
-        if files then
-            for _, f in ipairs(files) do
-                local ext = f:match("%.([^%.]+)$")
-                if ext then
-                    ext = ext:lower()
-                    if ext == "ass" or ext == "srt" or ext == "vtt" or ext == "sub" then
-                        local sub_path = extract_dir .. "/" .. f
-                        -- If more than one sub in archive, only select the first one encountered
-                        local flag = (loaded_count == 0) and (default_flag or "auto") or "auto"
-                        
-                        debug_log(string.format("Found internal sub: %s (flag: %s)", f, flag))
-                        mp.commandv("sub-add", sub_path, flag)
-                        loaded_count = loaded_count + 1
-                        
-                        -- Track for menu
-                        table.insert(menu_state.loaded_subs_files, f)
-                    end
-                end
+        -- Check if it's a subtitle file
+        if ext then
+            ext = ext:lower()
+            if ext == "ass" or ext == "srt" or ext == "vtt" or ext == "sub" then
+                table.insert(subtitle_files, {
+                    path = full_path,
+                    name = item
+                })
             end
         end
         
-        if loaded_count > 0 then
-            mp.osd_message(string.format("✓ Extracted & loaded %d subtitle(s)", loaded_count), 4)
-            menu_state.loaded_subs_count = menu_state.loaded_subs_count + loaded_count
-            return true
+        -- Check if it's a directory (recursively scan)
+        local attr = utils.file_info(full_path)
+        if attr and attr.is_dir then
+            local sub_files = scan_for_subtitles(full_path, max_depth - 1)
+            for _, sf in ipairs(sub_files) do
+                table.insert(subtitle_files, sf)
+            end
+        end
+    end
+    
+    return subtitle_files
+end
+
+-------------------------------------------------------------------------------
+-- HELPER: Try different extraction methods based on platform and availability
+-------------------------------------------------------------------------------
+local function try_extract_archive(archive_path, extract_dir)
+    local is_windows = package.config:sub(1,1) == '\\'
+    local ext = archive_path:match("%.([^%.]+)$")
+    if ext then ext = ext:lower() end
+    
+    -- Ensure extract directory exists
+    if STANDALONE_MODE then
+        if is_windows then
+            os.execute('mkdir "' .. extract_dir:gsub('/', '\\') .. '" 2>nul')
         else
-            debug_log("No subtitle files found inside archive", true)
-            mp.osd_message("Archive contains no subtitles!", 4)
-            return false
+            os.execute('mkdir -p ' .. escape_path(extract_dir))
         end
     else
-        debug_log("Extraction failed with status: " .. tostring(extract_result.status), true)
-        mp.osd_message("Failed to extract archive!", 4)
+        -- Create directory using mpv command
+        if is_windows then
+            mp.command_native({
+                name = "subprocess",
+                playback_only = false,
+                capture_stdout = true,
+                args = {"cmd", "/c", "mkdir", extract_dir:gsub('/', '\\')}
+            })
+        else
+            mp.command_native({
+                name = "subprocess",
+                playback_only = false,
+                args = {"mkdir", "-p", extract_dir}
+            })
+        end
+    end
+    
+    debug_log("Extracting to: " .. extract_dir)
+    
+    -- Method 1: Try 7z (best cross-platform support)
+    local extraction_attempts = {}
+    
+    if is_windows then
+        -- Windows extraction methods
+        table.insert(extraction_attempts, {
+            name = "7z",
+            args = {"7z", "x", archive_path, "-o" .. extract_dir, "-y"}
+        })
+        
+        -- PowerShell for ZIP only
+        if ext == "zip" then
+            table.insert(extraction_attempts, {
+                name = "powershell",
+                args = {"powershell", "-Command", 
+                    "Expand-Archive -Path " .. escape_path(archive_path) .. 
+                    " -DestinationPath " .. escape_path(extract_dir) .. " -Force"}
+            })
+        end
+        
+        -- tar (Windows 10+)
+        table.insert(extraction_attempts, {
+            name = "tar",
+            args = {"tar", "-xf", archive_path, "-C", extract_dir}
+        })
+    else
+        -- Unix/Linux extraction methods
+        if ext == "zip" then
+            table.insert(extraction_attempts, {
+                name = "unzip",
+                args = {"unzip", "-o", archive_path, "-d", extract_dir}
+            })
+        elseif ext == "7z" then
+            table.insert(extraction_attempts, {
+                name = "7z",
+                args = {"7z", "x", archive_path, "-o" .. extract_dir, "-y"}
+            })
+        elseif ext == "rar" then
+            table.insert(extraction_attempts, {
+                name = "unrar",
+                args = {"unrar", "x", "-o+", archive_path, extract_dir}
+            })
+        end
+        
+        -- tar works for most formats on Unix
+        table.insert(extraction_attempts, {
+            name = "tar",
+            args = {"tar", "-xf", archive_path, "-C", extract_dir}
+        })
+    end
+    
+    -- Try each extraction method
+    for _, method in ipairs(extraction_attempts) do
+        debug_log("Trying extraction with: " .. method.name)
+        
+        local result
+        if STANDALONE_MODE then
+            local cmd_parts = {}
+            for _, arg in ipairs(method.args) do
+                table.insert(cmd_parts, arg:match("%s") and escape_path(arg) or arg)
+            end
+            local cmd = table.concat(cmd_parts, " ")
+            debug_log("Command: " .. cmd)
+            local success = os.execute(cmd)
+            result = {status = success and 0 or 1}
+        else
+            result = mp.command_native({
+                name = "subprocess",
+                playback_only = false,
+                capture_stdout = true,
+                capture_stderr = true,
+                args = method.args
+            })
+        end
+        
+        if result.status == 0 then
+            debug_log("Extraction successful using: " .. method.name)
+            return true
+        else
+            debug_log(string.format("Extraction failed with %s (status: %d)", 
+                method.name, result.status))
+            if result.stderr then
+                debug_log("Error output: " .. result.stderr)
+            end
+        end
+    end
+    
+    return false
+end
+
+-------------------------------------------------------------------------------
+-- MAIN: Handle archive file extraction and loading
+-------------------------------------------------------------------------------
+handle_archive_file = function(archive_path, default_flag)
+    debug_log("Handling archive: " .. archive_path)
+    
+    -- Create a unique extraction directory based on filename and timestamp
+    local filename = archive_path:match("([^/\\]+)$") or "archive"
+    filename = filename:gsub("%.%w+$", "")  -- Remove extension
+    filename = filename:gsub("[^%w%-_]", "_")  -- Sanitize filename
+    
+    local extract_dir = SUBTITLE_CACHE_DIR .. "/extracted_" .. filename .. "_" .. os.time()
+    
+    -- Try to extract the archive
+    local extract_success = try_extract_archive(archive_path, extract_dir)
+    
+    if not extract_success then
+        debug_log("All extraction methods failed for: " .. archive_path, true)
+        mp.osd_message("Failed to extract archive!\nTry installing 7z or unzip.", 5)
+        return false
+    end
+    
+    -- Successfully extracted, now scan for subtitle files (recursively)
+    debug_log("Extraction successful, scanning for subtitles...")
+    local subtitle_files = scan_for_subtitles(extract_dir)
+    
+    if #subtitle_files == 0 then
+        debug_log("No subtitle files found inside archive", true)
+        mp.osd_message("Archive contains no subtitles!", 4)
+        return false
+    end
+    
+    debug_log(string.format("Found %d subtitle file(s) in archive", #subtitle_files))
+    
+    -- Load all found subtitle files
+    local loaded_count = 0
+    for i, sub_info in ipairs(subtitle_files) do
+        -- Only the first subtitle gets the specified flag (select/auto)
+        -- All others are loaded as "auto" (cached but not selected)
+        local flag = (i == 1) and (default_flag or "auto") or "auto"
+        
+        debug_log(string.format("Loading subtitle [%d/%d]: %s (flag: %s)", 
+            i, #subtitle_files, sub_info.name, flag))
+        
+        local success, err = pcall(function()
+            mp.commandv("sub-add", sub_info.path, flag)
+        end)
+        
+        if success then
+            loaded_count = loaded_count + 1
+            table.insert(menu_state.loaded_subs_files, sub_info.name)
+        else
+            debug_log(string.format("Failed to load subtitle: %s (%s)", sub_info.name, err), true)
+        end
+    end
+    
+    if loaded_count > 0 then
+        local msg = string.format("✓ Extracted & loaded %d subtitle(s) from archive", loaded_count)
+        if loaded_count < #subtitle_files then
+            msg = msg .. string.format("\n(%d failed to load)", #subtitle_files - loaded_count)
+        end
+        mp.osd_message(msg, 4)
+        menu_state.loaded_subs_count = menu_state.loaded_subs_count + loaded_count
+        update_loaded_subs_list()  -- Refresh the loaded subs list
+        return true
+    else
+        debug_log("No subtitles could be loaded from archive", true)
+        mp.osd_message("Failed to load subtitles from archive!", 4)
         return false
     end
 end
