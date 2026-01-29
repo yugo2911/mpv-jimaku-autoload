@@ -159,9 +159,10 @@ local MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT
 local render_menu_osd, close_menu, push_menu, pop_menu
 local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_left, handle_menu_right, handle_menu_select, handle_menu_num
 local debug_log, search_anilist, load_jimaku_api_key, is_archive_file
-local show_main_menu, show_subtitles_menu, show_search_menu
-local show_info_menu, show_settings_menu, show_cache_menu
+local show_main_menu, show_subtitles_menu, show_search_menu, show_download_menu
+local show_info_menu, show_settings_menu, show_cache_menu, show_help_menu, show_manage_menu
 local show_ui_settings_menu, show_filter_settings_menu, show_preferred_groups_menu
+local show_preferences_menu, show_download_settings_menu
 local show_subtitle_browser, fetch_all_episode_files, logical_sort_files
 local parse_jimaku_filename, download_selected_subtitle_action
 local show_current_match_info_action, reload_subtitles_action
@@ -210,6 +211,7 @@ render_menu_osd = function()
     local items = context.items
     local selected = context.selected
     local footer = context.footer or (#menu_state.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close")
+    local header = context.header
     
     local ass = mp.get_property_osd("osd-ass-cc/0")
     
@@ -220,10 +222,17 @@ render_menu_osd = function()
     local style_disabled = string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE)
     local style_footer = string.format("{\\fs%d\\c&HCCCCCC&}", JIMAKU_FONT_SIZE - 2)
     local style_dim = string.format("{\\fs%d\\c&H888888&}", JIMAKU_FONT_SIZE - 6)
+    local style_status = string.format("{\\fs%d\\c&HAAAAAA&}", JIMAKU_FONT_SIZE - 2)
     
     -- Build menu
     ass = ass .. style_header .. title .. "\\N"
     ass = ass .. string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE - 2) .. string.rep("━", 40) .. "\\N"
+    
+    -- Add header section if provided
+    if header then
+        ass = ass .. style_status .. header .. "\\N"
+        ass = ass .. string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE - 2) .. string.rep("─", 40) .. "\\N"
+    end
     
     -- Items
     for i, item in ipairs(items) do
@@ -322,7 +331,7 @@ handle_menu_num = function(n)
 end
 
 -- Navigation functions
-push_menu = function(title, items, footer, on_left, on_right, selected)
+push_menu = function(title, items, footer, on_left, on_right, selected, header)
     debug_log("Pushing menu: " .. title)
     if #menu_state.stack == 0 then
         bind_menu_keys()
@@ -333,7 +342,8 @@ push_menu = function(title, items, footer, on_left, on_right, selected)
         selected = selected or 1,
         footer = footer,
         on_left = on_left,
-        on_right = on_right
+        on_right = on_right,
+        header = header
     })
     menu_state.active = true
     render_menu_osd()
@@ -501,31 +511,58 @@ show_main_menu = function()
     menu_state.stack = {}
     menu_state.active = false
     
+    -- Build status line showing current video and loaded subs
+    local status_lines = {}
+    local m = menu_state.current_match
+    if m then
+        table.insert(status_lines, string.format("Match: %s S%dE%d", 
+            m.title:sub(1, 30), m.season or 1, m.episode or 1))
+    else
+        table.insert(status_lines, "Match: None (press 'A' to search)")
+    end
+    
+    local loaded_count = menu_state.loaded_subs_count or 0
+    local max_subs = JIMAKU_MAX_SUBS
+    table.insert(status_lines, string.format("Subs Loaded: %d/%d", loaded_count, max_subs))
+    
     local items = {
-        {text = "1. Subtitles      →", action = show_subtitles_menu},
-        {text = "2. Search         →", action = show_search_menu},
-        {text = "3. Information    →", action = show_info_menu},
-        {text = "4. Settings       →", action = show_settings_menu},
-        {text = "5. Cache          →", action = show_cache_menu},
+        {text = "1. Download Subtitles  →", action = show_download_menu},
+        {text = "2. Search & Match      →", action = show_search_menu},
+        {text = "3. Preferences         →", action = show_preferences_menu},
+        {text = "4. Manage & Cleanup    →", action = show_manage_menu},
+        {text = "5. About & Help        →", action = show_help_menu},
     }
     
-    push_menu("Jimaku Subtitle Menu", items)
+    -- Add status as non-selectable header items
+    local header = "CURRENT VIDEO\\N" .. table.concat(status_lines, "\\N")
+    push_menu("Jimaku Subtitle Manager", items, nil, nil, nil, nil, header)
 end
 
--- Subtitles Submenu
-show_subtitles_menu = function()
+-- Download Subtitles Menu (was: Subtitles Submenu)
+show_download_menu = function()
+    local jimaku_id = menu_state.jimaku_id
+    local has_match = jimaku_id ~= nil
+    local match_name = (menu_state.current_match and menu_state.current_match.title) or "None"
+    
     local items = {
-        {text = "1. Browse All Jimaku Subs  →", action = function()
+        {text = "1. Auto-Search & Download", action = function() 
+            search_anilist()
+            close_menu()
+        end},
+        {text = "2. Browse All Available", hint = has_match and "View all files" or "No match yet", 
+         disabled = not has_match, action = function()
             menu_state.browser_page = nil -- Signal to jump to current episode
             show_subtitle_browser()
         end},
-        {text = "2. Reload Current Subtitles", action = reload_subtitles_action},
         {text = "3. Download More (+5)", action = download_more_action},
-        {text = "4. Clear All Loaded", action = clear_subs_action},
+        {text = "4. Reload Current Match", disabled = not has_match, action = reload_subtitles_action},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Subtitle Actions", items)
+    push_menu("Download Subtitles", items)
 end
+
+-- Keep old function name for compatibility
+show_subtitles_menu = show_download_menu
 
 -- Subtitle Browser (Paginated)
 show_subtitle_browser = function()
@@ -734,16 +771,22 @@ show_search_menu = function()
     local results_count = #menu_state.search_results
     local results_hint = results_count > 0 and (results_count .. " found") or "No results"
     
+    local m = menu_state.current_match
+    local match_text = m and string.format("%s (ID: %s)", m.title, m.anilist_id) or "None"
+    local confidence_text = m and string.format("Confidence: %s", m.confidence or "unknown") or ""
+    
     local items = {
-        {text = "1. Re-run AniList Search", action = function() search_anilist(); pop_menu() end},
-        {text = "2. Browse Search Results", hint = results_hint, disabled = results_count == 0, action = function()
+        {text = "Current Match:", hint = match_text, disabled = true},
+        {text = "1. Re-run Auto Search", action = function() search_anilist(); pop_menu() end},
+        {text = "2. Pick from Results", hint = results_hint, disabled = results_count == 0, action = function()
             menu_state.search_results_page = 1
             show_search_results_menu()
         end},
-        {text = "3. Manual Title Search", action = nil, disabled = true, hint = "Not Implemented"},
+        {text = "3. View Match Details", disabled = not m, action = show_current_match_info_action},
+        {text = "4. Manual Search", action = nil, disabled = true, hint = "Coming soon"},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Search & Selection", items)
+    push_menu("Search & Match", items)
 end
 
 -- AniList Results Browser (Paginated)
@@ -871,119 +914,143 @@ apply_browser_filter = function(filter_text)
     end
 end
 
--- Information Submenu
-show_info_menu = function()
-    local m = menu_state.current_match
-    local match_text = "None"
-    if m then
-        match_text = string.format("%s (ID: %s)", m.title, m.anilist_id)
-    end
-    
+-- About & Help Menu (replaces Information)
+show_help_menu = function()
     local items = {
-        {text = "Current Match: ", hint = match_text},
-        {text = "1. Show Detailed Match Info", action = show_current_match_info_action},
-        {text = "2. View Log File Path", action = function() 
-            mp.osd_message("Log: " .. LOG_FILE, 5); pop_menu() 
+        {text = "1. View Log File", action = function() 
+            mp.osd_message("Log: " .. LOG_FILE, 5)
+            pop_menu()
+        end},
+        {text = "2. Reload API Key", action = function()
+            load_jimaku_api_key()
+            mp.osd_message("API key reloaded", 2)
+            pop_menu()
+        end},
+        {text = "3. Keyboard Shortcuts", action = function()
+            local shortcuts = 
+                "Keyboard Shortcuts:\\N" ..
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
+                "Ctrl+J / Alt+A  Open Menu\\N" ..
+                "A               Auto Search\\N" ..
+                "↑/↓            Navigate\\N" ..
+                "←/→            Page/Reorder\\N" ..
+                "Enter           Select\\N" ..
+                "Esc / 0         Back/Close\\N" ..
+                "1-9             Quick Select\\N" ..
+                "F / /           Filter (browser)"
+            mp.osd_message(shortcuts, 8)
+        end},
+        {text = "4. About Jimaku", action = function()
+            local about = 
+                "Jimaku Subtitle Manager\\N" ..
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
+                "Auto-downloads Japanese subtitles\\N" ..
+                "from jimaku.cc using AniList\\N\\N" ..
+                "Features:\\N" ..
+                "• Auto subtitle matching\\N" ..
+                "• Release group preferences\\N" ..
+                "• Cumulative episode support\\N" ..
+                "• Smart caching\\N\\N" ..
+                "Visit jimaku.cc for more info"
+            mp.osd_message(about, 10)
         end},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Information", items)
+    push_menu("About & Help", items)
 end
 
--- Settings Submenu
-show_settings_menu = function(selected)
+-- Keep old name for compatibility
+show_info_menu = show_help_menu
+
+-- Preferences Menu (replaces Settings)
+show_preferences_menu = function(selected)
+    local items = {
+        {text = "1. Download Settings   →", action = show_download_settings_menu},
+        {text = "2. Release Groups      →", action = show_preferred_groups_menu},
+        {text = "3. Interface           →", action = show_ui_settings_menu},
+        {text = "0. Back to Main Menu", action = pop_menu},
+    }
+    
+    push_menu("Preferences", items, nil, nil, nil, selected)
+end
+
+-- Keep old name for compatibility
+show_settings_menu = show_preferences_menu
+
+-- Download Settings (consolidates auto-download, max subs, hide signs)
+show_download_settings_menu = function(selected)
     local auto_dl_status = JIMAKU_AUTO_DOWNLOAD and "✓ Enabled" or "✗ Disabled"
+    local signs_status = JIMAKU_HIDE_SIGNS_ONLY and "✓ Hidden" or "✗ Shown"
     
     local items = {
-        {text = "1. Toggle Auto-download", hint = auto_dl_status, action = function()
+        {text = "1. Auto-download", hint = auto_dl_status, action = function()
             JIMAKU_AUTO_DOWNLOAD = not JIMAKU_AUTO_DOWNLOAD
-            pop_menu(); show_settings_menu(1)  -- Refresh with same selection
+            pop_menu(); show_download_settings_menu(1)
         end},
         {text = "2. Max Subtitles: " .. JIMAKU_MAX_SUBS, action = function()
             if JIMAKU_MAX_SUBS == 1 then JIMAKU_MAX_SUBS = 3
             elseif JIMAKU_MAX_SUBS == 3 then JIMAKU_MAX_SUBS = 5
             elseif JIMAKU_MAX_SUBS == 5 then JIMAKU_MAX_SUBS = 10
             else JIMAKU_MAX_SUBS = 1 end
-            pop_menu(); show_settings_menu(2)  -- Refresh with same selection
+            pop_menu(); show_download_settings_menu(2)
         end},
-        {text = "3. UI & Accessibility  →", action = show_ui_settings_menu},
-        {text = "4. Filters & Priority  →", action = show_filter_settings_menu},
-        {text = "5. Reload API Key", action = function()
-            load_jimaku_api_key()
-            pop_menu()
+        {text = "3. Hide Signs-Only Subs", hint = signs_status, action = function()
+            JIMAKU_HIDE_SIGNS_ONLY = not JIMAKU_HIDE_SIGNS_ONLY
+            pop_menu(); show_download_settings_menu(3)
         end},
-        {text = "0. Back to Main Menu", action = pop_menu},
+        {text = "0. Back to Preferences", action = pop_menu},
     }
     
-    push_menu("Settings", items, nil, nil, nil, selected)
+    push_menu("Download Settings", items, nil, nil, nil, selected)
 end
 
--- UI Settings Submenu
+-- UI Settings Submenu (Interface)
 show_ui_settings_menu = function(selected)
+    local osd_status = INITIAL_OSD_MESSAGES and "✓ Enabled" or "✗ Disabled"
+    
     local items = {
-        {text = "1. Items Per Page: " .. JIMAKU_ITEMS_PER_PAGE, action = function()
-            if JIMAKU_ITEMS_PER_PAGE == 4 then JIMAKU_ITEMS_PER_PAGE = 6
-            elseif JIMAKU_ITEMS_PER_PAGE == 6 then JIMAKU_ITEMS_PER_PAGE = 8
-            elseif JIMAKU_ITEMS_PER_PAGE == 8 then JIMAKU_ITEMS_PER_PAGE = 10
-            else JIMAKU_ITEMS_PER_PAGE = 4 end
-            -- Update current menu state if active
-            menu_state.items_per_page = JIMAKU_ITEMS_PER_PAGE
-            pop_menu(); show_ui_settings_menu(1)
-        end},
-        {text = "2. Menu Timeout: " .. JIMAKU_MENU_TIMEOUT .. "s", action = function()
-            if JIMAKU_MENU_TIMEOUT == 15 then JIMAKU_MENU_TIMEOUT = 30
-            elseif JIMAKU_MENU_TIMEOUT == 30 then JIMAKU_MENU_TIMEOUT = 60
-            elseif JIMAKU_MENU_TIMEOUT == 60 then JIMAKU_MENU_TIMEOUT = 0 -- Indefinite?
-            else JIMAKU_MENU_TIMEOUT = 15 end
-            MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT == 0 and 3600 or JIMAKU_MENU_TIMEOUT
-            pop_menu(); show_ui_settings_menu(2)
-        end},
-        {text = "3. Initial OSD Messages", hint = INITIAL_OSD_MESSAGES and "✓ Enabled" or "✗ Disabled", action = function()
-            INITIAL_OSD_MESSAGES = not INITIAL_OSD_MESSAGES
-            pop_menu(); show_ui_settings_menu(3)
-        end},
-        {text = "4. Font Size: " .. JIMAKU_FONT_SIZE, action = function()
+        {text = "1. Menu Font Size: " .. JIMAKU_FONT_SIZE, action = function()
             if JIMAKU_FONT_SIZE == 12 then JIMAKU_FONT_SIZE = 16
             elseif JIMAKU_FONT_SIZE == 16 then JIMAKU_FONT_SIZE = 20
             elseif JIMAKU_FONT_SIZE == 20 then JIMAKU_FONT_SIZE = 24
             elseif JIMAKU_FONT_SIZE == 24 then JIMAKU_FONT_SIZE = 28
             else JIMAKU_FONT_SIZE = 12 end
+            pop_menu(); show_ui_settings_menu(1)
+        end},
+        {text = "2. Items Per Page: " .. JIMAKU_ITEMS_PER_PAGE, action = function()
+            if JIMAKU_ITEMS_PER_PAGE == 4 then JIMAKU_ITEMS_PER_PAGE = 6
+            elseif JIMAKU_ITEMS_PER_PAGE == 6 then JIMAKU_ITEMS_PER_PAGE = 8
+            elseif JIMAKU_ITEMS_PER_PAGE == 8 then JIMAKU_ITEMS_PER_PAGE = 10
+            else JIMAKU_ITEMS_PER_PAGE = 4 end
+            menu_state.items_per_page = JIMAKU_ITEMS_PER_PAGE
+            pop_menu(); show_ui_settings_menu(2)
+        end},
+        {text = "3. Menu Timeout: " .. JIMAKU_MENU_TIMEOUT .. "s", action = function()
+            if JIMAKU_MENU_TIMEOUT == 15 then JIMAKU_MENU_TIMEOUT = 30
+            elseif JIMAKU_MENU_TIMEOUT == 30 then JIMAKU_MENU_TIMEOUT = 60
+            elseif JIMAKU_MENU_TIMEOUT == 60 then JIMAKU_MENU_TIMEOUT = 0 -- Indefinite
+            else JIMAKU_MENU_TIMEOUT = 15 end
+            MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT == 0 and 3600 or JIMAKU_MENU_TIMEOUT
+            pop_menu(); show_ui_settings_menu(3)
+        end},
+        {text = "4. OSD Messages", hint = osd_status, action = function()
+            INITIAL_OSD_MESSAGES = not INITIAL_OSD_MESSAGES
             pop_menu(); show_ui_settings_menu(4)
         end},
-        {text = "0. Back to Settings", action = pop_menu},
+        {text = "0. Back to Preferences", action = pop_menu},
     }
-    push_menu("UI Settings", items, nil, nil, nil, selected)
+    push_menu("Interface Settings", items, nil, nil, nil, selected)
 end
 
--- Filter Settings Submenu
-show_filter_settings_menu = function(selected)
-    local signs_status = JIMAKU_HIDE_SIGNS_ONLY and "✓ Hidden" or "✗ Shown"
-    local enabled_groups = {}
-    for _, g in ipairs(JIMAKU_PREFERRED_GROUPS) do
-        if g.enabled then table.insert(enabled_groups, g.name) end
-    end
-    local groups_str = #enabled_groups > 0 and table.concat(enabled_groups, ", ") or "None"
-    
-    local items = {
-        {text = "1. Hide Signs Only Subs", hint = signs_status, action = function()
-            JIMAKU_HIDE_SIGNS_ONLY = not JIMAKU_HIDE_SIGNS_ONLY
-            pop_menu(); show_filter_settings_menu(1)
-        end},
-        {text = "2. Preferred Groups  →", hint = groups_str, action = function()
-            show_preferred_groups_menu()
-        end},
-        {text = "0. Back to Settings", action = pop_menu},
-    }
-    push_menu("Filter Settings", items, nil, nil, nil, selected)
-end
-
--- Preferred Groups Management Submenu
+-- Preferred Groups Management Menu
 show_preferred_groups_menu = function(selected)
     local items = {}
     for i, group in ipairs(JIMAKU_PREFERRED_GROUPS) do
         local status = group.enabled and "✓ " or "✗ "
+        local priority = group.enabled and string.format(" [Priority %d]", i) or ""
         table.insert(items, {
             text = string.format("%d. %s%s", i, status, group.name),
+            hint = priority,
             action = function()
                 group.enabled = not group.enabled
                 pop_menu(); show_preferred_groups_menu(i)
@@ -995,7 +1062,7 @@ show_preferred_groups_menu = function(selected)
         mp.osd_message("Enter groups (comma separated) in console", 3)
         mp.commandv("script-message-to", "console", "type", "script-message jimaku-set-groups ")
     end})
-    table.insert(items, {text = "0. Back to Filter Settings", action = pop_menu})
+    table.insert(items, {text = "0. Back to Preferences", action = pop_menu})
     
     local on_left = function()
         local idx = menu_state.stack[#menu_state.stack].selected
@@ -1017,13 +1084,14 @@ show_preferred_groups_menu = function(selected)
         end
     end
     
-    local footer = "←/→ Reorder Priority | ENTER Toggle | 0 Back"
-    push_menu("Preferred Groups", items, footer, on_left, on_right, selected)
+    local footer = "←/→ Change Priority | ENTER Toggle | 0 Back"
+    push_menu("Release Group Priority", items, footer, on_left, on_right, selected)
 end
 
 -- Cache Submenu
-show_cache_menu = function()
-    -- Calculate current cache sizes
+-- Manage & Cleanup Menu (consolidates Cache + subtitle management)
+show_manage_menu = function()
+    -- Calculate cache stats
     local function count_table(tbl)
         local count = 0
         for _ in pairs(tbl) do count = count + 1 end
@@ -1035,47 +1103,52 @@ show_cache_menu = function()
     local episode_count = count_table(EPISODE_CACHE)
     
     local items = {
-        {text = "1. Show Cache Stats", action = function()
+        {text = "SUBTITLE MANAGEMENT", disabled = true},
+        {text = "1. Clear Loaded Subs", action = clear_subs_action},
+        {text = "2. Clear Subtitle Cache (Disk)", action = function()
+            clear_subtitle_cache()
+            pop_menu()
+        end},
+        {text = "", disabled = true},  -- Spacer
+        {text = "CACHE MANAGEMENT", disabled = true},
+        {text = "3. View Cache Stats", action = function()
             local stats = string.format(
                 "Cache Statistics:\\N" ..
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
-                "AniList Entries: %d\\N" ..
+                "AniList Searches: %d\\N" ..
                 "Jimaku Entries: %d\\N" ..
-                "Cached File Lists: %d\\N" ..
-                "Cache Directory: %s",
-                anilist_count,
-                jimaku_count,
-                episode_count,
+                "File Lists: %d\\N\\N" ..
+                "Cache Dir:\\N%s",
+                anilist_count, jimaku_count, episode_count,
                 SUBTITLE_CACHE_DIR
             )
             mp.osd_message(stats, 8)
         end},
-        {text = "2. Clear Subtitle Cache", action = function()
-            clear_subtitle_cache()
-            pop_menu()
-        end},
-        {text = "3. Clear Memory Episode Cache", action = function()
-            EPISODE_CACHE = {}
-            EPISODE_CACHE_KEYS = {}
-            mp.osd_message("Memory episode cache cleared", 2)
-            pop_menu()
-        end},
-        {text = "4. Clear AniList Search Cache", action = function()
+        {text = "4. Clear Search Cache", hint = anilist_count .. " entries", action = function()
             ANILIST_CACHE = {}
             save_ANILIST_CACHE()
-            mp.osd_message("AniList cache cleared", 2)
+            mp.osd_message("AniList search cache cleared", 2)
             pop_menu()
         end},
-        {text = "5. Clear Jimaku Entry Cache", action = function()
+        {text = "5. Clear Jimaku Cache", hint = jimaku_count .. " entries", action = function()
             JIMAKU_CACHE = {}
             save_JIMAKU_CACHE()
-            mp.osd_message("Jimaku cache cleared", 2)
+            mp.osd_message("Jimaku entry cache cleared", 2)
+            pop_menu()
+        end},
+        {text = "6. Clear File List Cache", hint = episode_count .. " lists", action = function()
+            EPISODE_CACHE = {}
+            EPISODE_CACHE_KEYS = {}
+            mp.osd_message("File list cache cleared", 2)
             pop_menu()
         end},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Cache Management", items)
+    push_menu("Manage & Cleanup", items)
 end
+
+-- Keep old name for compatibility
+show_cache_menu = show_manage_menu
 
 -- Unified logging function
 debug_log = function(message, is_error)
