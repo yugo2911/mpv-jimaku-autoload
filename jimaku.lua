@@ -477,7 +477,7 @@ end
 show_subtitles_menu = function()
     local items = {
         {text = "1. Browse All Jimaku Subs  →", action = function()
-            menu_state.browser_page = nil -- Signal to jump to current episode TODO:FIX THIS
+            menu_state.browser_page = nil -- Signal to jump to current episode
             show_subtitle_browser()
         end},
         {text = "2. Reload Current Subtitles", action = reload_subtitles_action},
