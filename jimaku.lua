@@ -2459,7 +2459,8 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "netflix_absolute_in_season_format"
-                    confidence = title_match and "medium-high" or "low"
+                    -- Netflix absolute numbering is reliable when it matches cumulative exactly
+                    confidence = title_match and "high" or "medium-high"
                 end
                 
                 -- Interpretation 1C: Season marker but episode is cumulative from that season's start
