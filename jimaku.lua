@@ -1,53 +1,59 @@
 -- Detect if running standalone (command line) or in mpv
 local STANDALONE_MODE = not pcall(function() return mp.get_property("filename") end)
 
-local utils
+local utils = (not STANDALONE_MODE) and require 'mp.utils' or nil
+
+-- 1. BASE CONFIGURATION & DEFAULTS
+local script_opts = {
+    jimaku_api_key       = "",
+    SUBTITLE_CACHE_DIR   = "./subtitle-cache",
+    JIMAKU_MAX_SUBS      = 5,
+    JIMAKU_AUTO_DOWNLOAD = true,
+    LOG_ONLY_ERRORS      = false,
+    JIMAKU_HIDE_SIGNS    = false,
+    JIMAKU_ITEMS_PER_PAGE= 6,
+    JIMAKU_MENU_TIMEOUT  = 30,
+    JIMAKU_FONT_SIZE     = 16,
+    INITIAL_OSD_MESSAGES = true
+}
+
+-- 2. DETERMINE PATHS
+CONFIG_DIR = STANDALONE_MODE and "." or mp.command_native({"expand-path", "~~/"})
+
+-- 3. LOAD OPTIONS FROM FILE
 if not STANDALONE_MODE then
-    utils = require 'mp.utils'
+    require("mp.options").read_options(script_opts, "jimaku")
 end
 
--- CONFIGURATION
-local CONFIG_DIR
-local LOG_FILE
-local PARSER_LOG_FILE
-local TEST_FILE
-local SUBTITLE_CACHE_DIR
-local JIMAKU_API_KEY_FILE
-local ANILIST_CACHE_FILE
-local JIMAKU_CACHE_FILE
-local ANILIST_API_URL = "https://graphql.anilist.co"
-local JIMAKU_API_URL = "https://jimaku.cc/api"
--- local PAUSE_STATE = false -- re
+-- 4. MAP TO GLOBAL VARIABLES
+ANILIST_API_URL    = "https://graphql.anilist.co"
+JIMAKU_API_URL     = "https://jimaku.cc/api"
+JIMAKU_API_KEY     = script_opts.jimaku_api_key
 
+LOG_FILE           = CONFIG_DIR .. "/autoload-subs.log"
+PARSER_LOG_FILE    = CONFIG_DIR .. "/parser-debug.log"
+TEST_FILE          = CONFIG_DIR .. "/torrents.txt"
+JIMAKU_API_KEY_FILE= CONFIG_DIR .. "/jimaku-api-key.txt"
+ANILIST_CACHE_FILE = CONFIG_DIR .. "/anilist-cache.json"
+JIMAKU_CACHE_FILE  = CONFIG_DIR .. "/jimaku-cache.json"
 
-if STANDALONE_MODE then
-    CONFIG_DIR = "."
-    LOG_FILE = "./anilist-debug.log"
-    PARSER_LOG_FILE = "./parser-debug.log"
-    TEST_FILE = "./torrents.txt"
-    SUBTITLE_CACHE_DIR = "./subtitle-cache"
-    JIMAKU_API_KEY_FILE = "./jimaku-api-key.txt"
-    ANILIST_CACHE_FILE = "./anilist-cache.json"
-    JIMAKU_CACHE_FILE = "./jimaku-cache.json"
-else
-    CONFIG_DIR = mp.command_native({"expand-path", "~~/"})
-    LOG_FILE = CONFIG_DIR .. "/anilist-debug.log"
-    PARSER_LOG_FILE = CONFIG_DIR .. "/parser-debug.log"
-    TEST_FILE = CONFIG_DIR .. "/torrents.txt"
-    SUBTITLE_CACHE_DIR = CONFIG_DIR .. "/subtitle-cache"
-    JIMAKU_API_KEY_FILE = CONFIG_DIR .. "/jimaku-api-key.txt"
-    ANILIST_CACHE_FILE = CONFIG_DIR .. "/anilist-cache.json"
-    JIMAKU_CACHE_FILE = CONFIG_DIR .. "/jimaku-cache.json"
+SUBTITLE_CACHE_DIR = script_opts.SUBTITLE_CACHE_DIR
+if not SUBTITLE_CACHE_DIR:match("^/") and not SUBTITLE_CACHE_DIR:match("^%a:") then
+    if not STANDALONE_MODE then
+        SUBTITLE_CACHE_DIR = CONFIG_DIR .. "/" .. SUBTITLE_CACHE_DIR:gsub("^./", "")
+    end
 end
 
--- Parser configuration
-local LOG_ONLY_ERRORS = false
+LOG_ONLY_ERRORS      = script_opts.LOG_ONLY_ERRORS
+JIMAKU_MAX_SUBS      = script_opts.JIMAKU_MAX_SUBS
+JIMAKU_AUTO_DOWNLOAD = script_opts.JIMAKU_AUTO_DOWNLOAD
+JIMAKU_HIDE_SIGNS_ONLY = script_opts.JIMAKU_HIDE_SIGNS
+JIMAKU_ITEMS_PER_PAGE= script_opts.JIMAKU_ITEMS_PER_PAGE
+JIMAKU_MENU_TIMEOUT  = script_opts.JIMAKU_MENU_TIMEOUT
+JIMAKU_FONT_SIZE     = script_opts.JIMAKU_FONT_SIZE
+INITIAL_OSD_MESSAGES = script_opts.INITIAL_OSD_MESSAGES
 
--- Jimaku configuration
-local JIMAKU_MAX_SUBS = 5 -- Maximum number of subtitles to download and load (set to "all" to download all available)
-local JIMAKU_AUTO_DOWNLOAD = true -- Automatically download subtitles when file starts playing (set to false to require manual key press)
-local JIMAKU_PREFERRED_GROUPS = {   -- Preferred loaded filename add wanted pattern SDH, NanakoRaws etc.. order matters
-    
+JIMAKU_PREFERRED_GROUPS = {
     {name = "Nekomoe kissaten", enabled = true},
     {name = "LoliHouse", enabled = true},
     {name = "Retimed", enabled = true},
@@ -59,25 +65,58 @@ local JIMAKU_PREFERRED_GROUPS = {   -- Preferred loaded filename add wanted patt
     {name = "Netflix", enabled = true},
     {name = "CHS", enabled = false}
 }
-local JIMAKU_HIDE_SIGNS_ONLY = false
-local JIMAKU_ITEMS_PER_PAGE = 6
-local JIMAKU_MENU_TIMEOUT = 30  -- Auto-close after seconds
-local JIMAKU_FONT_SIZE = 16
 
--- Jimaku API key (will be loaded from file)
-local JIMAKU_API_KEY = ""
+-- Runtime Caches
+episode_cache = {}
+anilist_cache = {}
+jimaku_cache = {}
 
--- Episode file cache
-local episode_cache = {}
+-- 5. DEBUG LOGGING FUNCTION
+-- Use this to track cache hits/misses
+debug_log = function(message, is_error)
+    if LOG_ONLY_ERRORS and not is_error then return end
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local log_msg = string.format("[%s] %s\n", timestamp, message)
+    
+    local f = io.open(LOG_FILE, "a")
+    if f then
+        f:write(log_msg)
+        f:close()
+    end
+    -- Also print to mpv terminal for convenience
+    print("Jimaku: " .. message)
+end
 
--- AniList search cache (persistent)
-local anilist_cache = {}
+-- Example Cache Utility with Debug Info
+save_persistent_cache = function(file_path, data)
+    debug_log("Cache Debug: Attempting to save to " .. file_path)
+    if not utils then return end
+    local json = utils.format_json(data)
+    local f = io.open(file_path, "w")
+    if f then
+        f:write(json)
+        f:close()
+        debug_log("Cache Debug: Successfully saved " .. #json .. " bytes.")
+    else
+        debug_log("Cache Debug: ERROR - Could not open file for writing: " .. file_path, true)
+    end
+end
 
--- Jimaku entry cache (persistent) 
-local jimaku_cache = {}
-
--- On-screen message configuration
-local INITIAL_OSD_MESSAGES = true -- if false, suppresses initial OSD messages during startup
+load_persistent_cache = function(file_path)
+    debug_log("Cache Debug: Checking for cache at " .. file_path)
+    local f = io.open(file_path, "r")
+    if f then
+        local content = f:read("*all")
+        f:close()
+        if content and content ~= "" then
+            local data = utils.parse_json(content)
+            debug_log("Cache Debug: HIT - Loaded existing cache from disk.")
+            return data
+        end
+    end
+    debug_log("Cache Debug: MISS - No valid cache file found.")
+    return {}
+end
 
 -------------------------------------------------------------------------------
 -- MENU SYSTEM STATE
@@ -1070,72 +1109,182 @@ local function ensure_subtitle_cache()
     end
 end
 
--- Load AniList cache from file
+-- Helper function to count table entries properly
+local function count_table_entries(tbl)
+    if not tbl or type(tbl) ~= "table" then return 0 end
+    local count = 0
+    for _ in pairs(tbl) do count = count + 1 end
+    return count
+end
+
+-- Improved load_anilist_cache with proper entry counting
 local function load_anilist_cache()
-    if STANDALONE_MODE then return end  -- Skip caching in standalone mode
+    if STANDALONE_MODE then 
+        debug_log("Cache Debug: STANDALONE_MODE - returning empty cache")
+        anilist_cache = {}
+        return 
+    end
     
     local f = io.open(ANILIST_CACHE_FILE, "r")
-    if f then
-        local content = f:read("*all")
-        f:close()
-        local ok, data = pcall(utils.parse_json, content)
-        if ok and data then
-            anilist_cache = data
-            debug_log("Loaded AniList cache with " .. #data .. " entries")
-        else
-            debug_log("Failed to parse AniList cache file", true)
-        end
-    else
+    if not f then
         debug_log("AniList cache file not found - will create on first search")
+        anilist_cache = {}
+        return
     end
-end
-
--- Save AniList cache to file
-local function save_anilist_cache()
-    if STANDALONE_MODE then return end  -- Skip caching in standalone mode
     
-    local f = io.open(ANILIST_CACHE_FILE, "w")
-    if f then
-        f:write(utils.format_json(anilist_cache))
-        f:close()
-        debug_log("Saved AniList cache with " .. #anilist_cache .. " entries")
-    else
-        debug_log("Failed to save AniList cache", true)
+    local content = f:read("*all")
+    f:close()
+    
+    if not content or content == "" then
+        debug_log("AniList cache file is empty")
+        anilist_cache = {}
+        return
+    end
+    
+    local ok, data = pcall(utils.parse_json, content)
+    if not ok then
+        debug_log("Failed to parse AniList cache file (corrupted JSON)", true)
+        anilist_cache = {}
+        return
+    end
+    
+    if not data or type(data) ~= "table" then
+        debug_log("AniList cache data is not a valid table")
+        anilist_cache = {}
+        return
+    end
+    
+    anilist_cache = data
+    local entry_count = count_table_entries(anilist_cache)
+    debug_log(string.format("Loaded AniList cache with %d entries (keys)", entry_count))
+    
+    -- Log some sample cache keys for debugging
+    if entry_count > 0 then
+        local sample_keys = {}
+        for key, _ in pairs(anilist_cache) do
+            table.insert(sample_keys, key)
+            if #sample_keys >= 3 then break end
+        end
+        debug_log(string.format("Sample cache keys: %s", table.concat(sample_keys, ", ")))
     end
 end
 
--- Load Jimaku cache from file
+-- Improved load_jimaku_cache with proper entry counting
 local function load_jimaku_cache()
-    if STANDALONE_MODE then return end  -- Skip caching in standalone mode
+    if STANDALONE_MODE then 
+        debug_log("Cache Debug: STANDALONE_MODE - returning empty cache")
+        jimaku_cache = {}
+        return 
+    end
     
     local f = io.open(JIMAKU_CACHE_FILE, "r")
-    if f then
-        local content = f:read("*all")
-        f:close()
-        local ok, data = pcall(utils.parse_json, content)
-        if ok and data then
-            jimaku_cache = data
-            debug_log("Loaded Jimaku cache with " .. #data .. " entries")
-        else
-            debug_log("Failed to parse Jimaku cache file", true)
-        end
-    else
+    if not f then
         debug_log("Jimaku cache file not found - will create on first search")
+        jimaku_cache = {}
+        return
+    end
+    
+    local content = f:read("*all")
+    f:close()
+    
+    if not content or content == "" then
+        debug_log("Jimaku cache file is empty")
+        jimaku_cache = {}
+        return
+    end
+    
+    local ok, data = pcall(utils.parse_json, content)
+    if not ok then
+        debug_log("Failed to parse Jimaku cache file (corrupted JSON)", true)
+        jimaku_cache = {}
+        return
+    end
+    
+    if not data or type(data) ~= "table" then
+        debug_log("Jimaku cache data is not a valid table")
+        jimaku_cache = {}
+        return
+    end
+    
+    jimaku_cache = data
+    local entry_count = count_table_entries(jimaku_cache)
+    debug_log(string.format("Loaded Jimaku cache with %d entries (keys)", entry_count))
+    
+    -- Log some sample cache keys for debugging
+    if entry_count > 0 then
+        local sample_keys = {}
+        for key, _ in pairs(jimaku_cache) do
+            table.insert(sample_keys, key)
+            if #sample_keys >= 3 then break end
+        end
+        debug_log(string.format("Sample cache keys: %s", table.concat(sample_keys, ", ")))
     end
 end
 
--- Save Jimaku cache to file
+-- Improved save_anilist_cache with proper entry counting
+local function save_anilist_cache()
+    if STANDALONE_MODE then 
+        debug_log("Cache Debug: STANDALONE_MODE - skipping save")
+        return 
+    end
+    
+    local entry_count = count_table_entries(anilist_cache)
+    debug_log(string.format("Saving AniList cache with %d entries", entry_count))
+    
+    if entry_count == 0 then
+        debug_log("Warning: Saving empty AniList cache")
+    end
+    
+    local f = io.open(ANILIST_CACHE_FILE, "w")
+    if not f then
+        debug_log("Failed to open AniList cache file for writing", true)
+        return
+    end
+    
+    local ok, json = pcall(utils.format_json, anilist_cache)
+    if not ok then
+        debug_log("Failed to serialize AniList cache to JSON", true)
+        f:close()
+        return
+    end
+    
+    f:write(json)
+    f:close()
+    
+    debug_log(string.format("Successfully saved AniList cache to %s", ANILIST_CACHE_FILE))
+end
+
+-- Improved save_jimaku_cache with proper entry counting
 local function save_jimaku_cache()
-    if STANDALONE_MODE then return end  -- Skip caching in standalone mode
+    if STANDALONE_MODE then 
+        debug_log("Cache Debug: STANDALONE_MODE - skipping save")
+        return 
+    end
+    
+    local entry_count = count_table_entries(jimaku_cache)
+    debug_log(string.format("Saving Jimaku cache with %d entries", entry_count))
+    
+    if entry_count == 0 then
+        debug_log("Warning: Saving empty Jimaku cache")
+    end
     
     local f = io.open(JIMAKU_CACHE_FILE, "w")
-    if f then
-        f:write(utils.format_json(jimaku_cache))
-        f:close()
-        debug_log("Saved Jimaku cache with " .. #jimaku_cache .. " entries")
-    else
-        debug_log("Failed to save Jimaku cache", true)
+    if not f then
+        debug_log("Failed to open Jimaku cache file for writing", true)
+        return
     end
+    
+    local ok, json = pcall(utils.format_json, jimaku_cache)
+    if not ok then
+        debug_log("Failed to serialize Jimaku cache to JSON", true)
+        f:close()
+        return
+    end
+    
+    f:write(json)
+    f:close()
+    
+    debug_log(string.format("Successfully saved Jimaku cache to %s", JIMAKU_CACHE_FILE))
 end
 
 -------------------------------------------------------------------------------
