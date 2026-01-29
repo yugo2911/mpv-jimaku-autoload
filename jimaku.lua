@@ -1139,8 +1139,7 @@ local function save_jimaku_cache()
 end
 
 -------------------------------------------------------------------------------
--- CUMULATIVE EPISODE CALCULATION (FIXED)
--- FIX #9: Better fallback handling with confidence tracking
+-- CUMULATIVE EPISODE CALCULATION
 -------------------------------------------------------------------------------
 
 -- Calculate cumulative episode number with confidence tracking
@@ -1216,7 +1215,6 @@ end
 
 -------------------------------------------------------------------------------
 -- JIMAKU SUBTITLE FILENAME PARSER
--- FIX #1: Improved pattern ordering and boundary checking
 -------------------------------------------------------------------------------
 
 -- Parse Jimaku subtitle filename to extract episode number(s)
@@ -1325,8 +1323,6 @@ end
 
 -------------------------------------------------------------------------------
 -- MAIN FILENAME PARSER (WITH CRITICAL HOTFIXES)
--- FIX #3: Improved title extraction with validation
--- HOTFIX: Japanese text, version tags, Part detection
 -------------------------------------------------------------------------------
 
 -- NEW: Strip Japanese/CJK/Korean characters and clean complex titles
@@ -2686,7 +2682,6 @@ end
 
 -------------------------------------------------------------------------------
 -- SMART MATCH ALGORITHM (FIXED)
--- FIX #10: Improved priority system with conflict resolution
 -------------------------------------------------------------------------------
 
 local function smart_match_anilist(results, parsed, episode_num, season_num, file_year)
