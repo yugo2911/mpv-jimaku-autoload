@@ -747,7 +747,6 @@ show_subtitle_browser = function()
 end
 
 -- Helper for sorting browser files logically
--- Helper for sorting browser files logically
 logical_sort_files = function(files)
     table.sort(files, function(a, b)
         local s_a, e_a = parse_jimaku_filename(a.name)
