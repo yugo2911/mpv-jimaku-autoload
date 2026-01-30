@@ -1,23 +1,23 @@
-# Jimaku Subtitles for MPV
+### 1. Install Dependencies
 
-Auto-download and load subtitles from [Jimaku.cc](https://Jimaku.cc)
+* **MPV Player:** Version **0.34.0** or newer.
+* **cURL:** Required for API requests (pre-installed on most modern systems).
+* **Archive Tools (Optional):** Required for `.zip`, `.rar`, or `.7z` support.
+> 🚧 **Note:** Archive extraction is currently **Work-in-Progress**. For best results, use individual `.ass` or `.srt` files.
 
-## Quick Setup
 
-1. **Install:**
-   ```bash
-   # Place in mpv scripts directory:
-   mpv/scripts/jimaku.lua
-   ```
+* **Windows:** Install [7-Zip](https://www.7-zip.org/) or [WinRAR](https://www.rarlab.com/) and ensure they are added to your **System PATH**.
+* **Linux:** `sudo apt install unzip unrar p7zip-full`
+* **macOS:** `brew install p7zip`
 
-2. **Configure:**
-   ```
-   mpv/script-opts/jimaku.conf
-   ```
-   Add your Jimaku API key:
-   ```ini
-   jimaku_api_key = "your_key_here"
-   ```
+---
+
+### 2. Download Script
+
+Place `jimaku.lua` in your mpv scripts folder:
+
+* **Windows:** `%APPDATA%\mpv\scripts\`
+* **Linux/macOS:** `~/.config/mpv/scripts/`
 
 3. **Use:**
    - `A`: Auto-search subtitles
@@ -25,45 +25,31 @@ Auto-download and load subtitles from [Jimaku.cc](https://Jimaku.cc)
    - Subtitles auto-download when opening files (enabled by default)
 
 <details>
-<summary><b>File Structure</b></summary>
+<summary>📂 <b>File Structure & Permissions</b></summary>
 
-```
-User's System (example paths)
-│
-├── mpv/
-│   ├── scripts/
-│   │   └── jimaku.lua                    ← Place script here
-│   │
-│   ├── script-opts/
-│   │   └── jimaku.conf                   ← Place config here
-│   │
-│   └── [Auto-created directories on first run]:
-│       ├── subtitle-cache/              ← Downloaded subtitles
-│       │   ├── extracted_archives/      ← Temporary archive extraction
-│       │   └── [subtitle files].ass
-│       │
-│       ├── cache/
-│       │   ├── anilist-cache.json       ← AniList API cache
-│       │   └── jimaku-cache.json        ← Jimaku API cache
-│       │
-│       └── data/
-│           └── torrents.txt             ← Test file for parser
-│
-├── Windows alternative locations:
-│     ├── %APPDATA%\mpv\scripts\jimaku.lua
-│     └── %APPDATA%\mpv\script-opts\jimaku.conf
-│
-├── Linux/macOS alternative locations:
-│     ├~/.config/mpv/scripts/jimaku.lua
-└───  └~/.config/mpv/script-opts/jimaku.conf
+The script requires **write access** to your mpv config directory. It will automatically create the following on first run:
+
+```text
+mpv/
+├── scripts/
+│   └── jimaku.lua
+├── script-opts/
+│   └── jimaku.conf
+├── subtitle-cache/       # Downloaded .ass/.srt files
+│   └── extracted_archives/
+├── cache/                # API response caching
+│   ├── anilist-cache.json
+│   └── jimaku-cache.json
+└── autoload-subs.log     # Debugging and error logs
+
 ```
 </details>
 
 <details>
-<summary><b>Configuration Options</b></summary>
+<summary><b>Config Options</b></summary>
 
 ```ini
-# jimaku.conf example
+# jimaku.conf — place in: ~/.config/mpv/script-opts/jimaku.conf
 jimaku_api_key = "your_jimaku_api_key_here"  ← REQUIRED
 SUBTITLE_CACHE_DIR = "./subtitle-cache"
 JIMAKU_MAX_SUBS = 10
@@ -165,6 +151,5 @@ jimaku.lua
 - Smart title matching with AniList
 - Auto-download subtitles from Jimaku.cc
 - Browse/filter subtitle files
-- ~~Archive extraction support (zip/rar/7z)~~ Archives are WIP 🚧
 - Cache system for faster searches
 - Interactive menu system
