@@ -56,6 +56,7 @@ JIMAKU_MENU_TIMEOUT  = script_opts.JIMAKU_MENU_TIMEOUT
 JIMAKU_FONT_SIZE     = script_opts.JIMAKU_FONT_SIZE
 INITIAL_OSD_MESSAGES = script_opts.INITIAL_OSD_MESSAGES
 
+-- Configure in what order to subtitiles will get loaded u can disable groups by setting enabled = false, useful cuz CHS for exampel contains Chinese subs
 JIMAKU_PREFERRED_GROUPS = {
     {name = "Nekomoe kissaten", enabled = true},
     {name = "LoliHouse", enabled = true},
