@@ -155,6 +155,6 @@ jimaku.lua
 - Interactive menu system
 
 
-Note confidence feedback currently does not make much sense u can ignore it...
-some things like cache deleting currently is wip
-gui is still wip aswell
+- Note confidence feedback currently does not make much sense u can ignore it...
+- some things like cache deleting currently is wip
+- gui is still wip aswell
