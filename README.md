@@ -1,6 +1,6 @@
 # Jimaku Subtitles for MPV
 
-Auto-download subtitles from Jimaku.cc by matching videos with AniList.
+Auto-download and load subtitles from [Jimaku.cc](https://Jimaku.cc)
 
 ## Quick Setup
 
