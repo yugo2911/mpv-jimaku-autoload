@@ -56,7 +56,7 @@ JIMAKU_MENU_TIMEOUT  = script_opts.JIMAKU_MENU_TIMEOUT
 JIMAKU_FONT_SIZE     = script_opts.JIMAKU_FONT_SIZE
 INITIAL_OSD_MESSAGES = script_opts.INITIAL_OSD_MESSAGES
 
--- Configure in what order to subtitiles will get loaded u can disable groups by setting enabled = false, useful cuz CHS for exampel contains Chinese subs
+-- Configure in what order to subtitiles will get loaded u can disable groups by setting enabled = false
 JIMAKU_PREFERRED_GROUPS = {
     {name = "Nekomoe kissaten", enabled = true},
     {name = "LoliHouse", enabled = true},
@@ -3253,69 +3253,84 @@ function manual_search_action()
     mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
 end
 
--- Single handler for search
+-- Single handler for search with pagination support
 mp.register_script_message("jimaku-search", function(query)
     if not query or query == "" then return end
-    
-    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
-        mp.osd_message("Set API key first", 3)
-        return
+    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then 
+        mp.osd_message("Set API key first", 3) 
+        return 
     end
-    
+
     mp.osd_message("Searching: " .. query, 3)
     
-    -- Direct curl (reusing existing pattern)
-    local search_url = string.format("%s/entries/search?anime=true&query=%s", 
-        JIMAKU_API_URL, query)
-    
+    local search_url = string.format("%s/entries/search?anime=true&query=%s", JIMAKU_API_URL, query)
     local result = mp.command_native({
         name = "subprocess",
         capture_stdout = true,
         playback_only = false,
-        args = {
-            "curl", "-s", "-X", "GET",
-            "-H", "Authorization: " .. JIMAKU_API_KEY,
-            search_url
-        }
+        args = { "curl", "-s", "-X", "GET", "-H", "Authorization: " .. JIMAKU_API_KEY, search_url }
     })
-    
+
     if result.status ~= 0 or not result.stdout then
         mp.osd_message("Search failed", 3)
         return
     end
-    
+
     local entries = utils.parse_json(result.stdout)
     if not entries or #entries == 0 then
         mp.osd_message("No results", 3)
         return
     end
-    
-    -- Simple picker
-    local items = {}
-    for i, entry in ipairs(entries) do
-        table.insert(items, {
-            text = string.format("%d. %s", i, entry.name),
-            hint = entry.anilist_id and ("ID: " .. entry.anilist_id) or "No AniList",
-            action = function()
-                -- Set as current match
-                menu_state.jimaku_id = entry.id
-                menu_state.jimaku_entry = entry
-                menu_state.current_match = {
-                    title = entry.name,
-                    anilist_id = entry.anilist_id,
-                    episode = 1,
-                    season = 1
-                }
-                menu_state.browser_files = nil
-                
-                mp.osd_message("Selected: " .. entry.name, 3)
-                close_menu()
-                show_subtitle_browser()
-            end
-        })
+
+    local function show_results_page(page, is_refresh)
+        local per_page = script_opts.JIMAKU_ITEMS_PER_PAGE
+        local total_pages = math.ceil(#entries / per_page)
+        local start_idx = (page - 1) * per_page + 1
+        local end_idx = math.min(start_idx + per_page - 1, #entries)
+        
+        local items = {}
+        for i = start_idx, end_idx do
+            local entry = entries[i]
+            table.insert(items, {
+                text = string.format("%d. %s", i - start_idx + 1, entry.name),
+                hint = entry.anilist_id and ("ID: " .. entry.anilist_id) or "No AniList",
+                action = function()
+                    menu_state.jimaku_id = entry.id
+                    menu_state.jimaku_entry = entry
+                    menu_state.current_match = { 
+                        title = entry.name, 
+                        anilist_id = entry.anilist_id, 
+                        episode = 1, 
+                        season = 1 
+                    }
+                    menu_state.browser_files = nil
+                    close_menu()
+                    show_subtitle_browser()
+                end
+            })
+        end
+
+        -- Navigation callbacks: pop current page before showing the next/prev
+        local on_left = function() 
+            if page > 1 then 
+                pop_menu() 
+                show_results_page(page - 1, true) 
+            end 
+        end
+        local on_right = function() 
+            if page < total_pages then 
+                pop_menu() 
+                show_results_page(page + 1, true) 
+            end 
+        end
+        
+        local title = string.format("Search: %s (%d/%d)", query, page, total_pages)
+        local footer = "←/→ Page | 0: Back"
+        
+        push_menu(title, items, footer, on_left, on_right)
     end
-    
-    push_menu("Jimaku Search: " .. query, items)
+
+    show_results_page(1, false)
 end)
 
 -------------------------------------------------------------------------------
@@ -3922,7 +3937,6 @@ if not STANDALONE_MODE then
     mp.add_key_binding("A", "anilist-search", search_anilist)
     
     -- Keyboard triggers for menu system (using standard bindings for script permanence)
-    mp.add_key_binding("ctrl+j", "jimaku-menu-ctrl-j", show_main_menu)
     mp.add_key_binding("alt+a", "jimaku-menu-alt-a", show_main_menu)
     
     -- Script message for browser filtering
@@ -3977,9 +3991,9 @@ if not STANDALONE_MODE then
             -- Small delay to ensure file/stream is ready
             mp.add_timeout(0.5, function() search_anilist(true) end)
         end)
-        debug_log("AniList Script Initialized. Works on local files and streams. Press 'Ctrl+j' or 'Alt+a' for menu.")
+        debug_log("AniList Script Initialized. Works on local files and streams. Press 'Alt+a' for menu.")
     else
         mp.register_event("file-loaded", update_loaded_subs_list)
-        debug_log("AniList Script Initialized. Press 'Ctrl+j' or 'Alt+a' for menu.")
+        debug_log("AniList Script Initialized. Press 'Alt+a' for menu.")
     end
 end
