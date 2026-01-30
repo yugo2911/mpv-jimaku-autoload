@@ -3,7 +3,7 @@ fix menu so it returns to menu instead of going back one page in manual search s
 fix config saving via menu
 fix archive files
 confidence feedback is not useful dont show it to users
-
+asyncrous subtitile downloading one the time is retarded
 
 low priority
 - async ui / fetching so we can insta acess ui
