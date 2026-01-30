@@ -6,7 +6,7 @@
 > 🚧 **Note:** Archive extraction is currently **Work-in-Progress**. For best results, use individual `.ass` or `.srt` files.
 
 
-* **Windows:** Install [7-Zip](https://www.7-zip.org/) or [WinRAR](https://www.rarlab.com/) and ensure they are added to your **System PATH**.
+* **Windows:** Install [7-Zip](https://www.7-zip.org/) and ensure is added to your **System PATH**.
 * **Linux:** `sudo apt install unzip unrar p7zip-full`
 * **macOS:** `brew install p7zip`
 
