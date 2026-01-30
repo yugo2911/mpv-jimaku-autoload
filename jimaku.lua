@@ -34,8 +34,8 @@ LOG_FILE           = CONFIG_DIR .. "/autoload-subs.log"
 PARSER_LOG_FILE    = CONFIG_DIR .. "/parser-debug.log"
 TEST_FILE          = CONFIG_DIR .. "/data/torrents.txt"
 JIMAKU_API_KEY_FILE= CONFIG_DIR .. "/jimaku-api-key.txt"
-ANILIST_CACHE_FILE = CONFIG_DIR .. "/anilist-cache.json"
-JIMAKU_CACHE_FILE  = CONFIG_DIR .. "/jimaku-cache.json"
+ANILIST_CACHE_FILE = CONFIG_DIR .. "/cache/anilist-cache.json"
+JIMAKU_CACHE_FILE  = CONFIG_DIR .. "/cache/jimaku-cache.json"
 
 SUBTITLE_CACHE_DIR = script_opts.SUBTITLE_CACHE_DIR
 if not SUBTITLE_CACHE_DIR:match("^/") and not SUBTITLE_CACHE_DIR:match("^%a:") then
@@ -781,7 +781,7 @@ show_search_menu = function()
             show_search_results_menu()
         end},
         {text = "3. View Match Details", disabled = not m, action = show_current_match_info_action},
-        {text = "4. Manual Search", action = manual_search_action, disabled = false, hint = "Type to search"},
+        {text = "4. Manual Search", action = manual_search_action, disabled = false},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("Search & Match", items)
