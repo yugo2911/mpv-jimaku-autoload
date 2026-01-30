@@ -782,6 +782,14 @@ show_search_menu = function()
         end},
         {text = "3. View Match Details", disabled = not m, action = show_current_match_info_action},
         {text = "4. Manual Search", action = manual_search_action, disabled = false},
+        
+        {text = "5. Manual AniList Search", hint = "Direct title search", action = manual_search_action},
+        {text = "6. View Match Details", disabled = not m, action = show_current_match_info_action},
+        {text = "7. Manual Jimaku Search", hint = "Direct Jimaku search", action = function()
+            mp.osd_message("Type search in console (press ~)", 3)
+            mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
+        end},
+        
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("Search & Match", items)
