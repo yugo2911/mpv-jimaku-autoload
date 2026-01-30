@@ -14,7 +14,9 @@ local script_opts = {
     JIMAKU_ITEMS_PER_PAGE= 8,
     JIMAKU_MENU_TIMEOUT  = 30,
     JIMAKU_FONT_SIZE     = 16,
-    INITIAL_OSD_MESSAGES = true
+    INITIAL_OSD_MESSAGES = true,
+    -- Disable log file by default
+    LOG_FILE             = false
 }
 
 -- 2. DETERMINE PATHS
@@ -30,10 +32,9 @@ ANILIST_API_URL    = "https://graphql.anilist.co"
 JIMAKU_API_URL     = "https://jimaku.cc/api"
 JIMAKU_API_KEY     = (script_opts.jimaku_api_key ~= "") and script_opts.jimaku_api_key or nil
 
-LOG_FILE           = CONFIG_DIR .. "/autoload-subs.log"
+LOG_FILE           = script_opts.LOG_FILE and CONFIG_DIR .. "/jimaku.log" or nil
 PARSER_LOG_FILE    = CONFIG_DIR .. "/parser-debug.log"
 TEST_FILE          = CONFIG_DIR .. "/data/torrents.txt"
--- JIMAKU_API_KEY_FILE removed
 ANILIST_CACHE_FILE = CONFIG_DIR .. "/cache/anilist-cache.json"
 JIMAKU_CACHE_FILE  = CONFIG_DIR .. "/cache/jimaku-cache.json"
 
@@ -43,6 +44,8 @@ if not SUBTITLE_CACHE_DIR:match("^/") and not SUBTITLE_CACHE_DIR:match("^%a:") t
         SUBTITLE_CACHE_DIR = CONFIG_DIR .. "/" .. SUBTITLE_CACHE_DIR:gsub("^./", "")
     end
 end
+
+LOG_FILE_HANDLE = nil
 
 LOG_ONLY_ERRORS      = script_opts.LOG_ONLY_ERRORS
 JIMAKU_MAX_SUBS      = script_opts.JIMAKU_MAX_SUBS
@@ -939,6 +942,7 @@ show_preferences_menu = function(selected)
         {text = "1. Download Settings   →", action = show_download_settings_menu},
         {text = "2. Release Groups      →", action = show_preferred_groups_menu},
         {text = "3. Interface           →", action = show_ui_settings_menu},
+        {text = "4. Save Settings", action = save_config_to_file},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     
@@ -1125,15 +1129,23 @@ show_cache_menu = show_manage_menu
 
 -- Unified logging function
 debug_log = function(message, is_error)
+    if LOG_ONLY_ERRORS and not is_error then return end
+    
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local prefix = is_error and "[ERROR] " or "[INFO] "
     local log_msg = string.format("%s %s%s\n", timestamp, prefix, message)
     
     local target_log = STANDALONE_MODE and PARSER_LOG_FILE or LOG_FILE
 
+    -- Initialize LOG_FILE_HANDLE on first use
+    if not LOG_FILE_HANDLE then
+        LOG_FILE_HANDLE = io.open(target_log, "a")
+    end
+    
     if LOG_FILE_HANDLE then
         pcall(function() LOG_FILE_HANDLE:write(log_msg) end)
     else
+        -- Fallback: open/close each time
         local f = io.open(target_log, "a")
         if f then
             f:write(log_msg)
@@ -1144,7 +1156,7 @@ debug_log = function(message, is_error)
     -- Print to terminal if not suppressed
     local should_log = not LOG_ONLY_ERRORS or is_error
     if should_log then
-        print(log_msg:gsub("\n", ""))
+        print(log_msg:gsub("\n", ""))  -- Remove the newline for terminal
     end
 end
 
@@ -1343,6 +1355,44 @@ local function save_JIMAKU_CACHE()
     debug_log(string.format("Successfully saved Jimaku cache to %s", JIMAKU_CACHE_FILE))
 end
 
+local function save_config_to_file()
+    if STANDALONE_MODE then 
+        debug_log("Cannot save config in standalone mode")
+        return 
+    end
+    
+    -- Update script_opts with current values
+    script_opts.jimaku_api_key = JIMAKU_API_KEY or ""
+    script_opts.JIMAKU_AUTO_DOWNLOAD = JIMAKU_AUTO_DOWNLOAD
+    script_opts.JIMAKU_FONT_SIZE = JIMAKU_FONT_SIZE
+    script_opts.JIMAKU_ITEMS_PER_PAGE = JIMAKU_ITEMS_PER_PAGE
+    script_opts.JIMAKU_MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT
+    script_opts.INITIAL_OSD_MESSAGES = INITIAL_OSD_MESSAGES
+    script_opts.LOG_ONLY_ERRORS = LOG_ONLY_ERRORS
+    script_opts.JIMAKU_MAX_SUBS = JIMAKU_MAX_SUBS
+    script_opts.JIMAKU_HIDE_SIGNS = JIMAKU_HIDE_SIGNS_ONLY
+    
+    -- Write to config file
+    local config_path = CONFIG_DIR .. "/script-opts/jimaku.conf"
+    local f = io.open(config_path, "w")
+    if f then
+        for key, value in pairs(script_opts) do
+            if type(value) == "boolean" then
+                f:write(key .. "=" .. (value and "yes" or "no") .. "\n")
+            elseif type(value) == "string" then
+                f:write(key .. "=" .. value .. "\n")
+            elseif type(value) == "number" then
+                f:write(key .. "=" .. tostring(value) .. "\n")
+            end
+        end
+        f:close()
+        mp.osd_message("✓ Settings saved to jimaku.conf", 2)
+        debug_log("Configuration saved to " .. config_path)
+    else
+        mp.osd_message("✗ Failed to save settings", 3)
+        debug_log("Failed to save configuration", true)
+    end
+end
 -------------------------------------------------------------------------------
 -- CUMULATIVE EPISODE CALCULATION
 -------------------------------------------------------------------------------
