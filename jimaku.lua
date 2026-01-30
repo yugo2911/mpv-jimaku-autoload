@@ -32,7 +32,7 @@ JIMAKU_API_KEY     = script_opts.jimaku_api_key
 
 LOG_FILE           = CONFIG_DIR .. "/autoload-subs.log"
 PARSER_LOG_FILE    = CONFIG_DIR .. "/parser-debug.log"
-TEST_FILE          = CONFIG_DIR .. "/torrents.txt"
+TEST_FILE          = CONFIG_DIR .. "/data/torrents.txt"
 JIMAKU_API_KEY_FILE= CONFIG_DIR .. "/jimaku-api-key.txt"
 ANILIST_CACHE_FILE = CONFIG_DIR .. "/anilist-cache.json"
 JIMAKU_CACHE_FILE  = CONFIG_DIR .. "/jimaku-cache.json"
