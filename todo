@@ -4,6 +4,8 @@ fix config saving via menu
 fix archive files
 confidence feedback is not useful dont show it to users
 asyncrous subtitile downloading one the time is retarded
+broke subtitle browser jump to current episode broken again......
+
 
 low priority
 - async ui / fetching so we can insta acess ui
