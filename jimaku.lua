@@ -780,22 +780,17 @@ show_search_menu = function()
     local confidence_text = m and string.format("Confidence: %s", m.confidence or "unknown") or ""
     
     local items = {
-        {text = "Current Match:", hint = match_text, disabled = true},
-        {text = "1. Re-run Auto Search", action = function() search_anilist(); pop_menu() end},
+        {text = "1. Current Match:", hint = match_text, disabled = true},
         {text = "2. Pick from Results", hint = results_hint, disabled = results_count == 0, action = function()
             menu_state.search_results_page = 1
             show_search_results_menu()
-        end},
-        {text = "3. View Match Details", disabled = not m, action = show_current_match_info_action},
-        {text = "4. Manual Search", action = manual_search_action, disabled = false},
-        
-        {text = "5. Manual AniList Search", hint = "Direct title search", action = manual_search_action},
-        {text = "6. View Match Details", disabled = not m, action = show_current_match_info_action},
-        {text = "7. Manual Jimaku Search", hint = "Direct Jimaku search", action = function()
+        end},        
+        {text = "3. Manual Jimaku Search", hint = "Direct Jimaku search", action = function()
             mp.osd_message("Type search in console (press ~)", 3)
             mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
         end},
-        
+        {text = "4. Manual AniList Search", hint = "Direct title search", action = manual_search_action},
+        {text = "5. Re-run Auto Search", action = function() search_anilist(); pop_menu() end},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("Search & Match", items)
