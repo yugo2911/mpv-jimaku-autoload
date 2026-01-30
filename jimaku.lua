@@ -3859,7 +3859,7 @@ search_anilist = function(is_auto)
         else
             -- AniList match found but no Jimaku entry exists
             local no_subs_msg = string.format(
-                "No subtitles on Jimaku for:\n%s (AniList ID: %d)\n\nYou can upload subtitles at jimaku.cc",
+                "No subtitles on Jimaku for:\n%s (AniList ID: %d)\n",
                 selected.title.romaji,
                 selected.id
             )
