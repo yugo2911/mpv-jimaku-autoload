@@ -74,20 +74,29 @@ EPISODE_CACHE = {}
 ANILIST_CACHE = {}
 JIMAKU_CACHE = {}
 
--- 5. DEBUG LOGGING FUNCTION
--- Use this to track cache hits/misses
+-- DEBUG LOGGING FUNCTION
 debug_log = function(message, is_error)
-    if LOG_ONLY_ERRORS and not is_error then return end
+    if script_opts.LOG_ONLY_ERRORS and not is_error then return end
+    
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local log_msg = string.format("[%s] %s\n", timestamp, message)
     
-    local f = io.open(LOG_FILE, "a")
-    if f then
-        f:write(log_msg)
-        f:close()
-    end
-    -- Also print to mpv terminal for convenience
+    -- 1. Always print to terminal
     print("Jimaku: " .. message)
+
+    -- 2. Handle File I/O safely
+    -- Check if LOG_FILE is a string (not nil/false)
+    local path = script_opts.LOG_FILE
+    if type(path) == "string" then
+        local f = io.open(path, "a")
+        if f then
+            f:write(log_msg)
+            f:close()
+        end
+    elseif LOG_FILE_HANDLE then
+        LOG_FILE_HANDLE:write(log_msg)
+        LOG_FILE_HANDLE:flush()
+    end
 end
 
 -- Example Cache Utility with Debug Info
@@ -161,7 +170,7 @@ local MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT
 -- Forward declare local functions for correct scoping
 local render_menu_osd, close_menu, push_menu, pop_menu
 local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_left, handle_menu_right, handle_menu_select, handle_menu_num
-local debug_log, search_anilist, is_archive_file
+local search_anilist, is_archive_file
 local show_main_menu, show_subtitles_menu, show_search_menu, show_download_menu
 local show_info_menu, show_settings_menu, show_cache_menu, show_help_menu, show_manage_menu
 local show_ui_settings_menu, show_filter_settings_menu, show_preferred_groups_menu
@@ -1127,38 +1136,6 @@ end
 -- Keep old name for compatibility
 show_cache_menu = show_manage_menu
 
--- Unified logging function
-debug_log = function(message, is_error)
-    if LOG_ONLY_ERRORS and not is_error then return end
-    
-    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
-    local prefix = is_error and "[ERROR] " or "[INFO] "
-    local log_msg = string.format("%s %s%s\n", timestamp, prefix, message)
-    
-    local target_log = STANDALONE_MODE and PARSER_LOG_FILE or LOG_FILE
-
-    -- Initialize LOG_FILE_HANDLE on first use
-    if not LOG_FILE_HANDLE then
-        LOG_FILE_HANDLE = io.open(target_log, "a")
-    end
-    
-    if LOG_FILE_HANDLE then
-        pcall(function() LOG_FILE_HANDLE:write(log_msg) end)
-    else
-        -- Fallback: open/close each time
-        local f = io.open(target_log, "a")
-        if f then
-            f:write(log_msg)
-            f:close()
-        end
-    end
-
-    -- Print to terminal if not suppressed
-    local should_log = not LOG_ONLY_ERRORS or is_error
-    if should_log then
-        print(log_msg:gsub("\n", ""))  -- Remove the newline for terminal
-    end
-end
 
 -- Create subtitle cache directory if it doesn't exist
 local function ensure_subtitle_cache()
