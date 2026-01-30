@@ -556,17 +556,16 @@ show_download_menu = function()
     local match_name = (menu_state.current_match and menu_state.current_match.title) or "None"
     
     local items = {
-        {text = "1. Auto-Search & Download", action = function() 
-            search_anilist()
-            close_menu()
-        end},
-        {text = "2. Browse All Available", hint = has_match and "View all files" or "No match yet", 
+        {text = "1. Browse All Available", hint = has_match and "View all files" or "No match yet", 
          disabled = not has_match, action = function()
             menu_state.browser_page = nil -- Signal to jump to current episode
             show_subtitle_browser()
         end},
-        {text = "3. Download More (+5)", action = download_more_action},
-        {text = "4. Reload Current Match", disabled = not has_match, action = reload_subtitles_action},
+        {text = "2. Auto-Search & Download", action = function() 
+            search_anilist()
+            close_menu()
+        end},
+        {text = "3. Reload Current Match", disabled = not has_match, action = reload_subtitles_action},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("Download Subtitles", items)
