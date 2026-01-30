@@ -33,7 +33,7 @@ JIMAKU_API_KEY     = (script_opts.jimaku_api_key ~= "") and script_opts.jimaku_a
 LOG_FILE           = CONFIG_DIR .. "/autoload-subs.log"
 PARSER_LOG_FILE    = CONFIG_DIR .. "/parser-debug.log"
 TEST_FILE          = CONFIG_DIR .. "/data/torrents.txt"
-JIMAKU_API_KEY_FILE= CONFIG_DIR .. "/jimaku-api-key.txt"
+-- JIMAKU_API_KEY_FILE removed
 ANILIST_CACHE_FILE = CONFIG_DIR .. "/cache/anilist-cache.json"
 JIMAKU_CACHE_FILE  = CONFIG_DIR .. "/cache/jimaku-cache.json"
 
@@ -158,7 +158,7 @@ local MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT
 -- Forward declare local functions for correct scoping
 local render_menu_osd, close_menu, push_menu, pop_menu
 local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_left, handle_menu_right, handle_menu_select, handle_menu_num
-local debug_log, search_anilist, load_jimaku_api_key, is_archive_file
+local debug_log, search_anilist, is_archive_file
 local show_main_menu, show_subtitles_menu, show_search_menu, show_download_menu
 local show_info_menu, show_settings_menu, show_cache_menu, show_help_menu, show_manage_menu
 local show_ui_settings_menu, show_filter_settings_menu, show_preferred_groups_menu
@@ -927,12 +927,7 @@ show_help_menu = function()
             mp.osd_message("Log: " .. LOG_FILE, 5)
             pop_menu()
         end},
-        {text = "2. Reload API Key", action = function()
-            load_jimaku_api_key()
-            mp.osd_message("API key reloaded", 2)
-            pop_menu()
-        end},
-
+        -- Removed "Reload API Key" item
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("About & Help", items)
@@ -1151,22 +1146,6 @@ debug_log = function(message, is_error)
     if should_log then
         print(log_msg:gsub("\n", ""))
     end
-end
-
--- Load Jimaku API key from file
-load_jimaku_api_key = function()
-    local f = io.open(JIMAKU_API_KEY_FILE, "r")
-    if f then
-        local key = f:read("*l")
-        f:close()
-        if key and key:match("%S") then
-            JIMAKU_API_KEY = key:match("^%s*(.-)%s*$")  -- Trim whitespace
-            debug_log("Jimaku API key loaded from: " .. JIMAKU_API_KEY_FILE)
-            return true
-        end
-    end
-    debug_log("Jimaku API key not found. Create " .. JIMAKU_API_KEY_FILE .. " with your API key.", true)
-    return false
 end
 
 -- Create subtitle cache directory if it doesn't exist
@@ -3899,8 +3878,13 @@ if not STANDALONE_MODE then
     -- Create subtitle cache directory
     ensure_subtitle_cache()
     
-    -- Load Jimaku API key
-    load_jimaku_api_key()
+    -- Note: API key is now loaded only from jimaku.conf via script_opts
+    -- Log API key status
+    if JIMAKU_API_KEY then
+        debug_log("Jimaku API key loaded from jimaku.conf")
+    else
+        debug_log("Jimaku API key not set. Please set jimaku_api_key in jimaku.conf", true)
+    end
     
     -- Load caches
     load_ANILIST_CACHE()
