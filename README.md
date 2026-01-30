@@ -1,3 +1,32 @@
+# Jimaku Subtitles for MPV
+
+Auto-download subtitles from Jimaku.cc by matching videos with AniList.
+
+## Quick Setup
+
+1. **Install:**
+   ```bash
+   # Place in mpv scripts directory:
+   mpv/scripts/jimaku.lua
+   ```
+
+2. **Configure:**
+   ```
+   mpv/script-opts/jimaku.conf
+   ```
+   Add your Jimaku API key:
+   ```ini
+   jimaku_api_key = "your_key_here"
+   ```
+
+3. **Use:**
+   - `A`: Auto-search subtitles
+   - `Ctrl+j`/`Alt+a`: Open menu
+   - Subtitles auto-download when opening files (enabled by default)
+
+<details>
+<summary><b>File Structure</b></summary>
+
 ```
 User's System (example paths)
 │
@@ -28,20 +57,28 @@ User's System (example paths)
 │     ├~/.config/mpv/scripts/jimaku.lua
 └───  └~/.config/mpv/script-opts/jimaku.conf
 ```
+</details>
 
+<details>
+<summary><b>Configuration Options</b></summary>
+
+```ini
+# jimaku.conf example
+jimaku_api_key = "your_jimaku_api_key_here"  ← REQUIRED
+SUBTITLE_CACHE_DIR = "./subtitle-cache"
+JIMAKU_MAX_SUBS = 10
+JIMAKU_AUTO_DOWNLOAD = true
+LOG_ONLY_ERRORS = false
+JIMAKU_HIDE_SIGNS = false
+JIMAKU_ITEMS_PER_PAGE = 8
+JIMAKU_MENU_TIMEOUT = 30
+JIMAKU_FONT_SIZE = 16
+INITIAL_OSD_MESSAGES = true
 ```
-├── Example jimaku.conf contents:
-    ├── jimaku_api_key = "your_jimaku_api_key_here"  ← REQUIRED
-    ├── SUBTITLE_CACHE_DIR = "./subtitle-cache"
-    ├── JIMAKU_MAX_SUBS = 10
-    ├── JIMAKU_AUTO_DOWNLOAD = true
-    ├── LOG_ONLY_ERRORS = false
-    ├── JIMAKU_HIDE_SIGNS = false
-    ├── JIMAKU_ITEMS_PER_PAGE = 8
-    ├── JIMAKU_MENU_TIMEOUT = 30
-    ├── JIMAKU_FONT_SIZE = 16
-    └── INITIAL_OSD_MESSAGES = true
-```
+</details>
+
+<details>
+<summary><b>How It Works</b></summary>
 
 ```
 jimaku.lua
@@ -122,3 +159,12 @@ jimaku.lua
 └── STANDALONE MODE
     └── Test parser with: lua jimaku.lua --parser torrents.txt
 ```
+</details>
+
+## Features
+- Smart title matching with AniList
+- Auto-download subtitles from Jimaku.cc
+- Browse/filter subtitle files
+- ~~Archive extraction support (zip/rar/7z)~~ Archives are WIP 🚧
+- Cache system for faster searches
+- Interactive menu system
