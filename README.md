@@ -153,3 +153,6 @@ jimaku.lua
 - Browse/filter subtitle files
 - Cache system for faster searches
 - Interactive menu system
+
+
+Note confidence feedback currently does not make much sense u can ignore it...
