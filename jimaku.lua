@@ -1007,15 +1007,20 @@ show_ui_settings_menu = function(selected)
     push_menu("Interface Settings", items, nil, nil, nil, selected)
 end
 
--- Preferred Groups Management Menu
 show_preferred_groups_menu = function(selected)
     local items = {}
     for i, group in ipairs(JIMAKU_PREFERRED_GROUPS) do
         local status = group.enabled and "✓ " or "✗ "
-        local priority = group.enabled and string.format(" [Priority %d]", i) or ""
+        local text = string.format("%d. %s%s", i, status, group.name)
+        
+        -- Apply gray style directly if disabled
+        if not group.enabled then
+            text = string.format("{\\c&H808080&}%s{\\c&HFFFFFF&}", text)
+        end
+        
         table.insert(items, {
-            text = string.format("%d. %s%s", i, status, group.name),
-            hint = priority,
+            text = text,
+            hint = nil,
             action = function()
                 group.enabled = not group.enabled
                 pop_menu(); show_preferred_groups_menu(i)
