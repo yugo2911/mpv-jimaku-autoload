@@ -740,39 +740,32 @@ show_subtitle_browser = function()
 end
 
 -- Helper for sorting browser files logically
+-- Helper for sorting browser files logically
 logical_sort_files = function(files)
     table.sort(files, function(a, b)
         local s_a, e_a = parse_jimaku_filename(a.name)
         local s_b, e_b = parse_jimaku_filename(b.name)
         
-        -- Primary: Season (if exists)
-        if s_a and s_b then
-            if s_a ~= s_b then return s_a < s_b end
-        elseif s_a then return false -- a has season, b doesn't
-        elseif s_b then return true  -- b has season, a doesn't
+        -- 1. Primary: Season
+        if s_a ~= s_b then
+            if s_a and s_b then return s_a < s_b end
+            return s_a ~= nil -- Non-nil seasons come first
         end
         
-        -- Secondary: Episode (handle both numbers and strings for fractional episodes)
-        if e_a and e_b then
-            -- Convert both to numbers for comparison
-            local num_a = tonumber(e_a)
-            local num_b = tonumber(e_b)
-            
+        -- 2. Secondary: Episode
+        if e_a ~= e_b then
+            local num_a, num_b = tonumber(e_a), tonumber(e_b)
             if num_a and num_b then
                 if num_a ~= num_b then return num_a < num_b end
-            elseif num_a then 
-                return true -- numeric episode comes before non-numeric
-            elseif num_b then 
-                return false
-            else
-                -- Both are non-numeric strings, compare as strings
-                if e_a ~= e_b then return tostring(e_a) < tostring(e_b) end
+            elseif num_a then return true
+            elseif num_b then return false
+            elseif e_a and e_b then 
+                return tostring(e_a) < tostring(e_b)
             end
-        elseif e_a then return true -- a has episode, b doesn't
-        elseif e_b then return false -- b has episode, a doesn't
+            return e_a ~= nil -- Non-nil episodes come first
         end
         
-        -- Tertiary: Filename
+        -- 3. Tertiary: Filename (Lowercase for stability)
         return a.name:lower() < b.name:lower()
     end)
 end
@@ -3282,7 +3275,8 @@ mp.register_script_message("jimaku-search", function(query)
         return
     end
 
-    local function show_results_page(page, is_refresh)
+    -- Implementation of Pagination for Manual Search
+    local function show_results_page(page)
         local per_page = script_opts.JIMAKU_ITEMS_PER_PAGE
         local total_pages = math.ceil(#entries / per_page)
         local start_idx = (page - 1) * per_page + 1
@@ -3310,19 +3304,8 @@ mp.register_script_message("jimaku-search", function(query)
             })
         end
 
-        -- Navigation callbacks: pop current page before showing the next/prev
-        local on_left = function() 
-            if page > 1 then 
-                pop_menu() 
-                show_results_page(page - 1, true) 
-            end 
-        end
-        local on_right = function() 
-            if page < total_pages then 
-                pop_menu() 
-                show_results_page(page + 1, true) 
-            end 
-        end
+        local on_left = function() if page > 1 then show_results_page(page - 1) end end
+        local on_right = function() if page < total_pages then show_results_page(page + 1) end end
         
         local title = string.format("Search: %s (%d/%d)", query, page, total_pages)
         local footer = "←/→ Page | 0: Back"
@@ -3330,7 +3313,7 @@ mp.register_script_message("jimaku-search", function(query)
         push_menu(title, items, footer, on_left, on_right)
     end
 
-    show_results_page(1, false)
+    show_results_page(1)
 end)
 
 -------------------------------------------------------------------------------
