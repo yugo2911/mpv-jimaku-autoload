@@ -402,8 +402,6 @@ bind_menu_keys = function()
     end
 end
 
--- Menu definitions follow...
-
 -------------------------------------------------------------------------------
 -- MENU DEFINITIONS & ACTIONS
 -------------------------------------------------------------------------------
@@ -926,41 +924,11 @@ show_help_menu = function()
             mp.osd_message("API key reloaded", 2)
             pop_menu()
         end},
-        {text = "3. Keyboard Shortcuts", action = function()
-            local shortcuts = 
-                "Keyboard Shortcuts:\\N" ..
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
-                "Ctrl+J / Alt+A  Open Menu\\N" ..
-                "A               Auto Search\\N" ..
-                "↑/↓            Navigate\\N" ..
-                "←/→            Page/Reorder\\N" ..
-                "Enter           Select\\N" ..
-                "Esc / 0         Back/Close\\N" ..
-                "1-9             Quick Select\\N" ..
-                "F / /           Filter (browser)"
-            mp.osd_message(shortcuts, 8)
-        end},
-        {text = "4. About Jimaku", action = function()
-            local about = 
-                "Jimaku Subtitle Manager\\N" ..
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
-                "Auto-downloads Japanese subtitles\\N" ..
-                "from jimaku.cc using AniList\\N\\N" ..
-                "Features:\\N" ..
-                "• Auto subtitle matching\\N" ..
-                "• Release group preferences\\N" ..
-                "• Cumulative episode support\\N" ..
-                "• Smart caching\\N\\N" ..
-                "Visit jimaku.cc for more info"
-            mp.osd_message(about, 10)
-        end},
+
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("About & Help", items)
 end
-
--- Keep old name for compatibility
-show_info_menu = show_help_menu
 
 -- Preferences Menu (replaces Settings)
 show_preferences_menu = function(selected)
@@ -973,9 +941,6 @@ show_preferences_menu = function(selected)
     
     push_menu("Preferences", items, nil, nil, nil, selected)
 end
-
--- Keep old name for compatibility
-show_settings_menu = show_preferences_menu
 
 -- Download Settings (consolidates auto-download, max subs, hide signs)
 show_download_settings_menu = function(selected)
