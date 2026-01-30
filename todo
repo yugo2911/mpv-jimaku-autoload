@@ -1,0 +1,7 @@
+make non selectables header items
+fix menu so it returns to menu instead of going back one page in manual search subtitle browser
+
+
+
+low priority
+- async ui / fetching

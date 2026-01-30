@@ -509,12 +509,17 @@ end
 
 -- Main Menu
 show_main_menu = function()
-    debug_log("Main menu action triggered")
-    
-    -- If already active, close it first (toggle behavior)
     if menu_state.active then
-        debug_log("Menu already active, closing first")
-        close_menu()
+        -- If we're deep in menus, pop back to main
+        if #menu_state.stack > 1 then
+            while #menu_state.stack > 1 do
+                table.remove(menu_state.stack)
+            end
+            render_menu_osd()
+        else
+            -- If already at main menu, close it
+            close_menu()
+        end
         return
     end
     
@@ -537,11 +542,11 @@ show_main_menu = function()
     table.insert(status_lines, string.format("Subs Loaded: %d/%d", loaded_count, max_subs))
     
     local items = {
-        {text = "1. Download Subtitles  →", action = show_download_menu},
-        {text = "2. Search & Match      →", action = show_search_menu},
-        {text = "3. Preferences         →", action = show_preferences_menu},
-        {text = "4. Manage & Cleanup    →", action = show_manage_menu},
-        {text = "5. About & Help        →", action = show_help_menu},
+        {text = "1. Download Subtitles  ", action = show_download_menu},
+        {text = "2. Search & Match      ", action = show_search_menu},
+        {text = "3. Preferences         ", action = show_preferences_menu},
+        {text = "4. Manage & Cleanup    ", action = show_manage_menu},
+        {text = "5. About & Help        ", action = show_help_menu},
     }
     
     -- Add status as non-selectable header items
@@ -555,6 +560,7 @@ show_download_menu = function()
     local has_match = jimaku_id ~= nil
     local match_name = (menu_state.current_match and menu_state.current_match.title) or "None"
     
+
     local items = {
         {text = "1. Browse All Available", hint = has_match and "View all files" or "No match yet", 
          disabled = not has_match, action = function()
@@ -568,7 +574,9 @@ show_download_menu = function()
         {text = "3. Reload Current Match", disabled = not has_match, action = reload_subtitles_action},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
-    push_menu("Download Subtitles", items)
+    -- Add status as non-selectable header items
+    local header = "CURRENT VIDEO\\N" .. match_name .. "\\N"
+    push_menu("Download Subtitles", items, nil, nil, nil, nil, header)
 end
 
 -- Keep old function name for compatibility
@@ -779,17 +787,17 @@ show_search_menu = function()
     local confidence_text = m and string.format("Confidence: %s", m.confidence or "unknown") or ""
     
     local items = {
-        {text = "1. Current Match:", hint = match_text, disabled = true},
-        {text = "2. Pick from Results", hint = results_hint, disabled = results_count == 0, action = function()
+        {text = "Current Match:", hint = match_text, disabled = true},
+        {text = "1. Pick from Results", hint = results_hint, disabled = results_count == 0, action = function()
             menu_state.search_results_page = 1
             show_search_results_menu()
         end},        
-        {text = "3. Manual Jimaku Search", hint = "Direct Jimaku search", action = function()
+        {text = "2. Manual Jimaku Search", action = function()
             mp.osd_message("Type search in console (press ~)", 3)
             mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
         end},
-        {text = "4. Manual AniList Search", hint = "Direct title search", action = manual_search_action},
-        {text = "5. Re-run Auto Search", action = function() search_anilist(); pop_menu() end},
+        {text = "3. Manual AniList Search", action = manual_search_action},
+        {text = "4. Re-run Auto Search", action = function() search_anilist(); pop_menu() end},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("Search & Match", items)
