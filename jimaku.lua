@@ -28,7 +28,7 @@ end
 -- 4. MAP TO GLOBAL VARIABLES
 ANILIST_API_URL    = "https://graphql.anilist.co"
 JIMAKU_API_URL     = "https://jimaku.cc/api"
-JIMAKU_API_KEY     = script_opts.jimaku_api_key
+JIMAKU_API_KEY     = (script_opts.jimaku_api_key ~= "") and script_opts.jimaku_api_key or nil
 
 LOG_FILE           = CONFIG_DIR .. "/autoload-subs.log"
 PARSER_LOG_FILE    = CONFIG_DIR .. "/parser-debug.log"
