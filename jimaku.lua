@@ -781,7 +781,7 @@ show_search_menu = function()
             show_search_results_menu()
         end},
         {text = "3. View Match Details", disabled = not m, action = show_current_match_info_action},
-        {text = "4. Manual Search", action = nil, disabled = true, hint = "Coming soon"},
+        {text = "4. Manual Search", action = manual_search_action, disabled = false, hint = "Type to search"},
         {text = "0. Back to Main Menu", action = pop_menu},
     }
     push_menu("Search & Match", items)
@@ -3222,6 +3222,80 @@ local function update_loaded_subs_list()
         end
     end
 end
+
+-- ULTRA SIMPLE MANUAL SEARCH
+-------------------------------------------------------------------------------
+
+-- Just one function to handle everything
+function manual_search_action()
+    mp.osd_message("Type search in console (press ~)", 3)
+    mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
+end
+
+-- Single handler for search
+mp.register_script_message("jimaku-search", function(query)
+    if not query or query == "" then return end
+    
+    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
+        mp.osd_message("Set API key first", 3)
+        return
+    end
+    
+    mp.osd_message("Searching: " .. query, 3)
+    
+    -- Direct curl (reusing existing pattern)
+    local search_url = string.format("%s/entries/search?anime=true&query=%s", 
+        JIMAKU_API_URL, query)
+    
+    local result = mp.command_native({
+        name = "subprocess",
+        capture_stdout = true,
+        playback_only = false,
+        args = {
+            "curl", "-s", "-X", "GET",
+            "-H", "Authorization: " .. JIMAKU_API_KEY,
+            search_url
+        }
+    })
+    
+    if result.status ~= 0 or not result.stdout then
+        mp.osd_message("Search failed", 3)
+        return
+    end
+    
+    local entries = utils.parse_json(result.stdout)
+    if not entries or #entries == 0 then
+        mp.osd_message("No results", 3)
+        return
+    end
+    
+    -- Simple picker
+    local items = {}
+    for i, entry in ipairs(entries) do
+        table.insert(items, {
+            text = string.format("%d. %s", i, entry.name),
+            hint = entry.anilist_id and ("ID: " .. entry.anilist_id) or "No AniList",
+            action = function()
+                -- Set as current match
+                menu_state.jimaku_id = entry.id
+                menu_state.jimaku_entry = entry
+                menu_state.current_match = {
+                    title = entry.name,
+                    anilist_id = entry.anilist_id,
+                    episode = 1,
+                    season = 1
+                }
+                menu_state.browser_files = nil
+                
+                mp.osd_message("Selected: " .. entry.name, 3)
+                close_menu()
+                show_subtitle_browser()
+            end
+        })
+    end
+    
+    push_menu("Jimaku Search: " .. query, items)
+end)
 
 -------------------------------------------------------------------------------
 -- MPV MODE - ANILIST INTEGRATION
