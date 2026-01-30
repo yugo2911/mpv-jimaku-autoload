@@ -527,6 +527,9 @@ show_main_menu = function()
     
     local m = menu_state.current_match
     local has_match = menu_state.jimaku_id ~= nil
+    local results_count = #menu_state.search_results
+    local results_hint = results_count > 0 and (results_count .. " found") or "No results"
+    
     local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
                      or "Match: None (press 'A' to search)"
     
@@ -540,12 +543,19 @@ show_main_menu = function()
                 show_subtitle_browser()
             end
         },
-        -- Wrapped in function to ensure show_download_menu is resolved at runtime
-        {text = "2. Download Subtitles", action = function() show_download_menu() end},
-        {text = "3. Search & Match",     action = function() show_search_menu() end},
-        {text = "4. Preferences",        action = function() show_preferences_menu() end},
-        {text = "5. Manage & Cleanup",   action = function() show_manage_menu() end},
-        {text = "6. About & Help",       action = function() show_help_menu() end},
+        {
+            text = "2. Pick from Results", 
+            hint = results_hint, 
+            disabled = results_count == 0, 
+            action = function()
+                menu_state.search_results_page = 1
+                show_search_results_menu()
+            end
+        },
+        {text = "3. Download Subtitles", action = function() show_download_menu() end},
+        {text = "4. Search & Match",     action = function() show_search_menu() end},
+        {text = "5. Preferences",        action = function() show_preferences_menu() end},
+        {text = "6. Manage & Cleanup",   action = function() show_manage_menu() end},
     }
     
     local header = "JIMAKU SUBTITLE MANAGER\\N" .. status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
@@ -916,19 +926,6 @@ apply_browser_filter = function(filter_text)
     else
         render_menu_osd()
     end
-end
-
--- About & Help Menu (replaces Information)
-show_help_menu = function()
-    local items = {
-        {text = "1. View Log File", action = function() 
-            mp.osd_message("Log: " .. LOG_FILE, 5)
-            pop_menu()
-        end},
-        -- Removed "Reload API Key" item
-        {text = "0. Back to Main Menu", action = pop_menu},
-    }
-    push_menu("About & Help", items)
 end
 
 -- Preferences Menu (replaces Settings)
