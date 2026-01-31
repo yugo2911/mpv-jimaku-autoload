@@ -29,8 +29,7 @@ end
 -- 4. MAP TO GLOBAL VARIABLES
 ANILIST_API_URL    = "https://graphql.anilist.co"
 JIMAKU_API_URL     = "https://jimaku.cc/api"
-JIMAKU_API_KEY     = (script_opts.jimaku_api_key ~= "") and script_opts.jimaku_api_key or nil
-
+JIMAKU_API_KEY = (script_opts.jimaku_api_key and script_opts.jimaku_api_key ~= "") and script_opts.jimaku_api_key or nil
 LOG_FILE           = script_opts.LOG_FILE and CONFIG_DIR .. "/jimaku.log" or nil
 PARSER_LOG_FILE    = CONFIG_DIR .. "/parser-debug.log"
 TEST_FILE          = CONFIG_DIR .. "/data/torrents.txt"
@@ -2499,70 +2498,59 @@ end
 
 -- Search Jimaku for subtitle entry by AniList ID
 local function search_jimaku_subtitles(anilist_id)
+    -- O(1) Guard: Prevent misleading "No entries found" if key is missing
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
         debug_log("Jimaku API key not configured - skipping subtitle search", false)
-        return nil
+        return nil, "MISSING_KEY"
     end
     
     debug_log(string.format("Searching Jimaku for AniList ID: %d", anilist_id))
     
-    -- Check cache first
+    -- Cache Check (O(1))
     local cache_key = tostring(anilist_id)
     if not STANDALONE_MODE and JIMAKU_CACHE[cache_key] then
         local cache_entry = JIMAKU_CACHE[cache_key]
         local cache_age = os.time() - cache_entry.timestamp
-        if cache_age < 3600 then  -- Cache valid for 1 hour
+        if cache_age < 3600 then
             debug_log(string.format("Using cached Jimaku entry for AniList ID %d (%d seconds old)", 
                 anilist_id, cache_age))
-            return cache_entry.entry
+            return cache_entry.entry, "CACHE_HIT"
         else
-            debug_log(string.format("Jimaku cache expired for AniList ID %d (%d seconds old)", 
-                anilist_id, cache_age))
+            debug_log(string.format("Jimaku cache expired for AniList ID %d", anilist_id))
             JIMAKU_CACHE[cache_key] = nil
         end
     end
     
-    -- Search for entry by AniList ID
     local search_url = string.format("%s/entries/search?anilist_id=%d&anime=true", 
         JIMAKU_API_URL, anilist_id)
-    
-    local args = {
-        "curl", "-s", "-X", "GET",
-        "-H", "Authorization: " .. JIMAKU_API_KEY,
-        search_url
-    }
     
     local result = mp.command_native({
         name = "subprocess",
         capture_stdout = true,
         playback_only = false,
-        args = args
+        args = {"curl", "-s", "-X", "GET", "-H", "Authorization: " .. JIMAKU_API_KEY, search_url}
     })
     
     if result.status ~= 0 or not result.stdout then
         debug_log("Jimaku search request failed", true)
-        return nil
+        return nil, "NETWORK_ERROR"
     end
     
     local ok, entries = pcall(utils.parse_json, result.stdout)
     if not ok or not entries or #entries == 0 then
         debug_log("No Jimaku entries found for AniList ID: " .. anilist_id, false)
-        return nil
+        return nil, "NOT_FOUND"
     end
     
     debug_log(string.format("Found Jimaku entry: %s (ID: %d)", entries[1].name, entries[1].id))
     
-    -- Cache the result
     JIMAKU_CACHE[cache_key] = {
         entry = entries[1],
         timestamp = os.time()
     }
-    if not STANDALONE_MODE then
-        save_JIMAKU_CACHE()
-    end
-    debug_log(string.format("Cached Jimaku entry for AniList ID %d", anilist_id))
+    if not STANDALONE_MODE then save_JIMAKU_CACHE() end
     
-    return entries[1]
+    return entries[1], "SUCCESS"
 end
 
 -- Fetch ALL subtitle files for an entry (no episode filter)
