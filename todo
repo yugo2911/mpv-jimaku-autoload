@@ -17,8 +17,6 @@ low priority
 
 lets rethink how we do cahcing, what order to load the stuff in and what should be loaded async, make sure we index files deeper than 1 level cuz of archives they are at various levels
 
-do not rename functions make sure syntax is right make sure all works and makes sense
-
 
 brokeb subtitle browser jump to current episode broken again......
 
@@ -26,5 +24,8 @@ brokeb subtitle browser jump to current episode broken again......
 make it read local files even if anilist and jimaku fail
 
 browse all files(view all files) >, browse all files(Retrieved 1253 total subtitle files)
+
+
+makes sense to get local subs first if user has them from kitsunekko
 
 

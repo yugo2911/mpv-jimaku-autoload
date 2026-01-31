@@ -2633,16 +2633,19 @@ local function is_relevant_subtitle(filename, target_title, target_episode, targ
     end
 
     -- Extract episode number from filename
-    local file_episode = extract_episode_from_filename(filename)
+    -- FIX: Use same parser as Jimaku files for consistency
+    local season, episode = parse_jimaku_filename(filename)
+    local file_episode = episode
     -- If we found an episode number, check if it matches
     if file_episode and target_episode then
-        -- Tighter tolerance: only accept episodes within ±3 of target
-        local episode_tolerance = 3
+        -- FIXED: Changed from ±3 tolerance to exact match (tolerance = 0)
+        -- This prevents loading wrong episodes (e.g., loading E6-E12 when wanting E9)
+        local episode_tolerance = 0  -- Changed from 3 to 0 for exact matching
         if math.abs(file_episode - target_episode) <= episode_tolerance then
             return true, string.format("episode match (file:%d, target:%d)", file_episode, target_episode)
         end
-        return false, string.format("episode too far (file:%d, target:%d, tolerance:%d)", 
-            file_episode, target_episode, episode_tolerance)
+        return false, string.format("episode mismatch (file:%d, target:%d)", 
+            file_episode, target_episode)
     end
     -- If no episode number found, still require strong title match
     -- Check full title variations match (not just one word)
@@ -2750,10 +2753,13 @@ local function scan_for_subtitles(dir_path, base_dir, target_title, target_episo
                     end
 
                     if relevant then
+                        -- FIX: Use same parser as Jimaku files
+                        local season, episode = parse_jimaku_filename(item)
                         table.insert(subtitle_files, {
                             path = dir_path .. "/" .. item,
                             name = item,
-                            episode = extract_episode_from_filename(item)
+                            episode = episode,
+                            season = season
                         })
                         debug_log(string.format("Accepted: %s (%s)", item, reason))
                     end
