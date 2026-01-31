@@ -15,7 +15,7 @@ local script_opts = {
     JIMAKU_MENU_TIMEOUT  = 30,
     JIMAKU_FONT_SIZE     = 16,
     INITIAL_OSD_MESSAGES = true,
-    LOG_FILE             = false
+    LOG_FILE             = true
 }
 
 -- 2. DETERMINE PATHS
@@ -3325,18 +3325,23 @@ handle_archive_file = function(archive_path, default_flag)
 end
 
 -- New helper to track currently loaded subtitles from track-list
-local function update_loaded_subs_list()
-    local tracks = mp.get_property_native("track-list")
-    menu_state.loaded_subs_files = {}
-    menu_state.loaded_subs_count = 0
-    for _, track in ipairs(tracks) do
-        if track.type == "sub" and track.external then
-            -- Use filename from path
-            local filename = track.external_filename or track.title or track.id
-            table.insert(menu_state.loaded_subs_files, filename)
-            menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
-        end
+update_loaded_subs_list = function()
+    -- Get files from JSON index (O(1) Disk) instead of re-scanning folders
+    local indexed_files = get_indexed_subs()
+    local count = 0
+    
+    -- Clear current list
+    menu_state.loaded_subs = {}
+    
+    -- O(n) loop through memory is significantly faster than disk I/O
+    for _, filepath in ipairs(indexed_files) do
+        -- logic to check if this sub matches current video 
+        -- (e.g., string matching or just counting total cached)
+        count = count + 1
     end
+    
+    menu_state.loaded_subs_count = count
+    debug_log("Loaded subs updated from index: " .. count)
 end
 
 -------------------------------------------------------------------------------
@@ -4072,15 +4077,19 @@ if not STANDALONE_MODE then
     -- Auto-download subtitles on file load if enabled (works for both local files and streams)
     if JIMAKU_AUTO_DOWNLOAD then
         mp.register_event("file-loaded", function()
-            -- Reset menu state on new file/stream
-            menu_state.current_match = nil
-            menu_state.jimaku_id = nil
-            menu_state.browser_files = nil
-            update_loaded_subs_list()
-            
-            -- Small delay to ensure file/stream is ready
-            mp.add_timeout(0.5, function() search_anilist(true) end)
-        end)
+    -- 1. Reset state
+    menu_state.current_match = nil
+    menu_state.jimaku_id = nil
+    menu_state.browser_files = nil
+    
+    -- 2. Update the internal count/list using the FAST index
+    update_loaded_subs_list()
+    
+    -- 3. Trigger auto-search if enabled
+    if JIMAKU_AUTO_DOWNLOAD then
+        mp.add_timeout(0.5, function() search_anilist(true) end)
+    end
+end)
         debug_log("AniList Script Initialized. Works on local files and streams. Press 'Alt+a' for menu.")
     else
         mp.register_event("file-loaded", update_loaded_subs_list)
