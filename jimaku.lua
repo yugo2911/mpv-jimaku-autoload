@@ -2616,20 +2616,22 @@ local function is_relevant_subtitle(filename, target_title, target_episode, targ
             table.insert(title_words, word)
         end
     end
-    -- Require at least one significant word match to prevent matching unrelated shows
-    local has_significant_match = false
+    -- Require SIGNIFICANT word match
+    -- Heuristic: Must match at least 60% of significant words if title has multiple words
+    local matched_count = 0
     if #title_words > 0 then
         for _, word in ipairs(title_words) do
             if lower_filename:find(word, 1, true) then
-                has_significant_match = true
-                break
+                matched_count = matched_count + 1
             end
         end
+        local match_ratio = matched_count / #title_words
+        -- If single word title, must match it. If multiple words, require >60% match
+        if (#title_words == 1 and matched_count == 0) or (#title_words > 1 and match_ratio < 0.6) then
+            return false, string.format("insufficient title match (%d/%d words)", matched_count, #title_words)
+        end
     end
-    -- If no significant word matches, reject immediately
-    if not has_significant_match then
-        return false, "title mismatch"
-    end
+
     -- Extract episode number from filename
     local file_episode = extract_episode_from_filename(filename)
     -- If we found an episode number, check if it matches
