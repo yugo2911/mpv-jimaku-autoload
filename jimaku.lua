@@ -562,22 +562,103 @@ show_main_menu = function()
     push_menu("Main Menu", items, nil, nil, nil, nil, header)
 end
 
--- 2. Download Subtitles Menu (Cleaned up)
-show_download_menu = function()
-    local has_match = menu_state.jimaku_id ~= nil
-    local match_name = (menu_state.current_match and menu_state.current_match.title) or "None"
-
-    local items = {
-        {text = "1. Auto-Search & Download", action = function() 
-            search_anilist()
+-- 1. Main Menu (Updated to point to consolidated menu)
+show_main_menu = function()
+    if menu_state.active then
+        if #menu_state.stack > 1 then
+            while #menu_state.stack > 1 do table.remove(menu_state.stack) end
+            render_menu_osd()
+        else
             close_menu()
-        end},
-        {text = "2. Reload Current Match", disabled = not has_match, action = reload_subtitles_action},
-        {text = "0. Back to Main Menu",    action = pop_menu},
+        end
+        return
+    end
+    
+    menu_state.stack = {}
+    menu_state.active = false
+    
+    local m = menu_state.current_match
+    local has_match = menu_state.jimaku_id ~= nil
+    local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
+                     or "Match: None (press 'A' to search)"
+    
+    local items = {
+        {
+            text = "1. Browse All Available", 
+            hint = has_match and "View all files" or "No match yet", 
+            disabled = not has_match, 
+            action = function()
+                menu_state.browser_page = nil
+                show_subtitle_browser()
+            end
+        },
+        -- Pointing to the consolidated menu
+        {text = "2. Search & Download", action = function() show_download_menu() end},
+        {text = "3. Preferences",        action = function() show_preferences_menu() end},
+        {text = "4. Manage & Cleanup",   action = function() show_manage_menu() end},
     }
     
-    local header = "DOWNLOAD MENU\\N" .. match_name .. "\\N"
-    push_menu("Download Subtitles", items, nil, nil, nil, nil, header)
+    local header = "JIMAKU SUBTITLE MANAGER\\N" .. status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
+    push_menu("Main Menu", items, nil, nil, nil, nil, header)
+end
+
+-- Consolidated Search & Download Menu
+-- Replaces both show_download_menu and show_search_menu
+show_download_menu = function()
+    -- Cached local lookups for O(1) access during item construction
+    local ms = menu_state
+    local m = ms.current_match
+    local results_count = #ms.search_results
+    local has_match = ms.jimaku_id ~= nil
+    
+    local match_name = m and m.title or "None"
+    local match_details = m and string.format("ID: %s | Conf: %s", m.anilist_id, m.confidence or "??") or "No active match"
+    local results_hint = results_count > 0 and (results_count .. " found") or "No results"
+
+    local items = {
+        -- Status Headers (Disabled items for display only)
+        {text = "Current:", hint = match_name, disabled = true},
+        {text = "Details:", hint = match_details, disabled = true},
+        
+        -- Primary Logic Items
+        {
+            text = "1. Auto-Search & Match", 
+            action = function() 
+                search_anilist()
+                close_menu()
+            end
+        },
+        {
+            text = "2. Pick from Results", 
+            hint = results_hint, 
+            disabled = results_count == 0, 
+            action = function()
+                ms.search_results_page = 1
+                show_search_results_menu()
+            end
+        },
+        {
+            text = "3. Reload Current Match", 
+            disabled = not has_match, 
+            action = reload_subtitles_action
+        },
+        {
+            text = "4. Manual Jimaku Search", 
+            action = function()
+                mp.osd_message("Type search in console (press ~)", 3)
+                mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
+            end
+        },
+        {
+            text = "5. Manual AniList Search", 
+            action = manual_search_action
+        },
+        
+        {text = "0. Back to Main Menu", action = pop_menu},
+    }
+    
+    local header = "SEARCH & DOWNLOAD\\N" .. string.rep("—", 20)
+    push_menu("Search & Download", items, nil, nil, nil, nil, header)
 end
 
 -- Keep old function name for compatibility
@@ -775,32 +856,6 @@ logical_sort_files = function(files)
         -- 3. Tertiary: Filename (Lowercase for stability)
         return a.name:lower() < b.name:lower()
     end)
-end
-
--- Search Submenu
-show_search_menu = function()
-    local results_count = #menu_state.search_results
-    local results_hint = results_count > 0 and (results_count .. " found") or "No results"
-    
-    local m = menu_state.current_match
-    local match_text = m and string.format("%s (ID: %s)", m.title, m.anilist_id) or "None"
-    local confidence_text = m and string.format("Confidence: %s", m.confidence or "unknown") or ""
-    
-    local items = {
-        {text = "Current Match:", hint = match_text, disabled = true},
-        {text = "1. Pick from Results", hint = results_hint, disabled = results_count == 0, action = function()
-            menu_state.search_results_page = 1
-            show_search_results_menu()
-        end},        
-        {text = "2. Manual Jimaku Search", action = function()
-            mp.osd_message("Type search in console (press ~)", 3)
-            mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
-        end},
-        {text = "3. Manual AniList Search", action = manual_search_action},
-        {text = "4. Re-run Auto Search", action = function() search_anilist(); pop_menu() end},
-        {text = "0. Back to Main Menu", action = pop_menu},
-    }
-    push_menu("Search & Match", items)
 end
 
 -- AniList Results Browser (Paginated)
