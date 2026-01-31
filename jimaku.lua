@@ -36,6 +36,7 @@ PARSER_LOG_FILE    = CONFIG_DIR .. "/parser-debug.log"
 TEST_FILE          = CONFIG_DIR .. "/data/torrents.txt"
 ANILIST_CACHE_FILE = CONFIG_DIR .. "/cache/anilist-cache.json"
 JIMAKU_CACHE_FILE  = CONFIG_DIR .. "/cache/jimaku-cache.json"
+PREFERRED_GROUPS_FILE = CONFIG_DIR .. "/cache/preferred-groups.json"
 
 SUBTITLE_CACHE_DIR = script_opts.SUBTITLE_CACHE_DIR
 if not SUBTITLE_CACHE_DIR:match("^/") and not SUBTITLE_CACHE_DIR:match("^%a:") then
@@ -55,19 +56,10 @@ JIMAKU_MENU_TIMEOUT  = script_opts.JIMAKU_MENU_TIMEOUT
 JIMAKU_FONT_SIZE     = script_opts.JIMAKU_FONT_SIZE
 INITIAL_OSD_MESSAGES = script_opts.INITIAL_OSD_MESSAGES
 
+
 -- Configure in what order to subtitiles will get loaded u can disable groups by setting enabled = false
-JIMAKU_PREFERRED_GROUPS = {
-    {name = "Nekomoe kissaten", enabled = true},
-    {name = "LoliHouse", enabled = true},
-    {name = "Retimed", enabled = true},
-    {name = "WEBRip", enabled = true},
-    {name = "WEB-DL", enabled = true},
-    {name = "WEB", enabled = true},
-    {name = "Amazon", enabled = true},
-    {name = "AMZN", enabled = true},
-    {name = "Netflix", enabled = true},
-    {name = "CHS", enabled = false}
-}
+-- Will be loaded from cache during initialization
+JIMAKU_PREFERRED_GROUPS = nil
 
 -- Runtime Caches
 EPISODE_CACHE = {}
@@ -128,6 +120,42 @@ load_persistent_cache = function(file_path)
     end
     debug_log("Cache Debug: MISS - No valid cache file found.")
     return {}
+end
+-- Load preferred groups from cache or use defaults
+local function load_preferred_groups()
+    local cached = load_persistent_cache(PREFERRED_GROUPS_FILE)
+    
+    -- If cache exists and has data, use it
+    if cached and cached.groups and #cached.groups > 0 then
+        debug_log("Loaded " .. #cached.groups .. " preferred groups from cache")
+        return cached.groups
+    end
+    
+    -- Otherwise use defaults
+    debug_log("Using default preferred groups")
+    return {
+        {name = "Nekomoe kissaten", enabled = true},
+        {name = "LoliHouse", enabled = true},
+        {name = "Retimed", enabled = true},
+        {name = "WEBRip", enabled = true},
+        {name = "WEB-DL", enabled = true},
+        {name = "WEB", enabled = true},
+        {name = "Amazon", enabled = true},
+        {name = "AMZN", enabled = true},
+        {name = "Netflix", enabled = true},
+        {name = "CHS", enabled = false}
+    }
+end
+
+-- Save preferred groups to cache
+save_preferred_groups = function()
+    local data = {
+        version = 1,
+        last_updated = os.time(),
+        groups = JIMAKU_PREFERRED_GROUPS
+    }
+    save_persistent_cache(PREFERRED_GROUPS_FILE, data)
+    debug_log("Saved " .. #JIMAKU_PREFERRED_GROUPS .. " preferred groups to cache")
 end
 
 -- TODO INDEX FILE LOCATIONS INSTEAD OF DUMB SCAN ON BOOT
@@ -223,7 +251,9 @@ local show_subtitle_browser, fetch_all_episode_files, logical_sort_files
 local parse_jimaku_filename, download_selected_subtitle_action
 local show_current_match_info_action, reload_subtitles_action
 local download_more_action, clear_subs_action, show_search_results_menu
+local save_config_to_file
 local select_anilist_result, handle_archive_file, apply_browser_filter
+local save_preferred_groups
 
 -- Close menu and cleanup
 close_menu = function()
@@ -1121,6 +1151,11 @@ show_ui_settings_menu = function(selected)
 end
 
 show_preferred_groups_menu = function(selected)
+    -- Ensure preferred groups are loaded
+    if not JIMAKU_PREFERRED_GROUPS then
+        JIMAKU_PREFERRED_GROUPS = load_preferred_groups()
+    end
+
     local items = {}
     for i, group in ipairs(JIMAKU_PREFERRED_GROUPS) do
         local status = group.enabled and "✓ " or "✗ "
@@ -1136,6 +1171,7 @@ show_preferred_groups_menu = function(selected)
             hint = nil,
             action = function()
                 group.enabled = not group.enabled
+                save_preferred_groups()
                 pop_menu(); show_preferred_groups_menu(i)
             end
         })
@@ -1153,6 +1189,7 @@ show_preferred_groups_menu = function(selected)
             local temp = JIMAKU_PREFERRED_GROUPS[idx]
             JIMAKU_PREFERRED_GROUPS[idx] = JIMAKU_PREFERRED_GROUPS[idx-1]
             JIMAKU_PREFERRED_GROUPS[idx-1] = temp
+            save_preferred_groups()
             pop_menu(); show_preferred_groups_menu(idx - 1)
         end
     end
@@ -1163,7 +1200,7 @@ show_preferred_groups_menu = function(selected)
             local temp = JIMAKU_PREFERRED_GROUPS[idx]
             JIMAKU_PREFERRED_GROUPS[idx] = JIMAKU_PREFERRED_GROUPS[idx+1]
             JIMAKU_PREFERRED_GROUPS[idx+1] = temp
-            pop_menu(); show_preferred_groups_menu(idx + 1)
+            save_preferred_groups()
         end
     end
     
@@ -1242,6 +1279,23 @@ local function ensure_subtitle_cache()
         -- Use mpv's subprocess to avoid CMD window flash on Windows
         local is_windows = package.config:sub(1,1) == '\\'
         local args = is_windows and {"cmd", "/C", "mkdir", SUBTITLE_CACHE_DIR} or {"mkdir", "-p", SUBTITLE_CACHE_DIR}
+        
+        mp.command_native({
+            name = "subprocess",
+            playback_only = false,
+            args = args
+        })
+    end
+end
+
+-- Create directory without CMD flash (cross-platform)
+local function ensure_directory(dir_path)
+    if STANDALONE_MODE then
+        os.execute("mkdir -p " .. dir_path)
+    else
+        -- Use mpv's subprocess to avoid CMD window flash on Windows
+        local is_windows = package.config:sub(1,1) == '\\'
+        local args = is_windows and {"cmd", "/C", "mkdir", dir_path} or {"mkdir", "-p", dir_path}
         
         mp.command_native({
             name = "subprocess",
@@ -1429,13 +1483,33 @@ local function save_JIMAKU_CACHE()
     debug_log(string.format("Successfully saved Jimaku cache to %s", JIMAKU_CACHE_FILE))
 end
 
-local function save_config_to_file()
+save_config_to_file = function()
+    debug_log("========== SAVE CONFIG DEBUG START ==========")
+    
+    -- Check standalone mode
     if STANDALONE_MODE then 
-        debug_log("Cannot save config in standalone mode")
+        debug_log("ERROR: Cannot save config in standalone mode", true)
+        mp.osd_message("✗ Cannot save in standalone mode", 3)
         return 
+    end
+    debug_log("✓ Not in standalone mode")
+    
+    -- Debug CONFIG_DIR
+    debug_log("CONFIG_DIR = " .. tostring(CONFIG_DIR))
+    debug_log("CONFIG_DIR type = " .. type(CONFIG_DIR))
+    
+    -- Helper function to mask sensitive data in logs
+    local function mask_api_key(key)
+        if not key or key == "" or #key < 8 then
+            return "***"
+        end
+        return key:sub(1, 4) .. "..." .. key:sub(-4)
     end
     
     -- Update script_opts with current values
+    -- IMPORTANT: For SUBTITLE_CACHE_DIR, preserve the original relative path format
+    -- by NOT overwriting script_opts.SUBTITLE_CACHE_DIR (it already has the user's preferred format)
+    debug_log("Updating script_opts with current runtime values...")
     script_opts.jimaku_api_key = JIMAKU_API_KEY or ""
     script_opts.JIMAKU_AUTO_DOWNLOAD = JIMAKU_AUTO_DOWNLOAD
     script_opts.JIMAKU_FONT_SIZE = JIMAKU_FONT_SIZE
@@ -1445,27 +1519,157 @@ local function save_config_to_file()
     script_opts.LOG_ONLY_ERRORS = LOG_ONLY_ERRORS
     script_opts.JIMAKU_MAX_SUBS = JIMAKU_MAX_SUBS
     script_opts.JIMAKU_HIDE_SIGNS = JIMAKU_HIDE_SIGNS_ONLY
+    -- DON'T overwrite SUBTITLE_CACHE_DIR - keep original user format (relative vs absolute)
+    script_opts.LOG_FILE = LOG_FILE and true or false
     
-    -- Write to config file
-    local config_path = CONFIG_DIR .. "/script-opts/jimaku.conf"
-    local f = io.open(config_path, "w")
-    if f then
-        for key, value in pairs(script_opts) do
+    -- Log current values (with API key masked)
+    debug_log("Current settings to save:")
+    for k, v in pairs(script_opts) do
+        local display_value = (k == "jimaku_api_key") and mask_api_key(tostring(v)) or tostring(v)
+        debug_log(string.format("  %s = %s (%s)", k, display_value, type(v)))
+    end
+    
+    -- Construct paths
+    local script_opts_dir = CONFIG_DIR .. "/script-opts"
+    local config_path = script_opts_dir .. "/jimaku.conf"
+    
+    debug_log("script_opts_dir = " .. script_opts_dir)
+    debug_log("config_path = " .. config_path)
+    
+    -- Check if directory exists
+    debug_log("Checking if script-opts directory exists...")
+    local dir_check = io.open(script_opts_dir, "r")
+    if dir_check then
+        dir_check:close()
+        debug_log("✓ Directory appears to exist (or is a file)")
+    else
+        debug_log("✗ Directory does not exist, attempting to create...")
+    end
+    
+    -- Try to create directory
+    debug_log("Creating directory: " .. script_opts_dir)
+    ensure_directory(script_opts_dir)
+    debug_log("Directory creation command executed")
+    
+    -- Verify directory creation
+    local dir_verify = io.open(script_opts_dir, "r")
+    if dir_verify then
+        dir_verify:close()
+        debug_log("✓ Directory verified after mkdir")
+    else
+        debug_log("✗ Directory still doesn't exist after mkdir!", true)
+    end
+    
+    -- Try opening file for writing
+    debug_log("Attempting to open file for writing: " .. config_path)
+    local f, err = io.open(config_path, "w")
+    
+    if not f then
+        local error_msg = "Failed to open config file: " .. (err or "unknown error")
+        debug_log("✗ " .. error_msg, true)
+        debug_log("Attempting to get more error details...")
+        
+        -- Try to get file info
+        local test_read = io.open(config_path, "r")
+        if test_read then
+            debug_log("  - File exists and is readable")
+            test_read:close()
+        else
+            debug_log("  - File does not exist or is not readable")
+        end
+        
+        -- Check parent directory permissions
+        local parent_test = io.open(CONFIG_DIR .. "/test_write.tmp", "w")
+        if parent_test then
+            parent_test:close()
+            os.remove(CONFIG_DIR .. "/test_write.tmp")
+            debug_log("  - Parent directory IS writable")
+        else
+            debug_log("  - Parent directory NOT writable!", true)
+        end
+        
+        mp.osd_message("✗ Failed to create config file\n" .. (err or ""), 5)
+        debug_log("========== SAVE CONFIG DEBUG END (FAILED) ==========")
+        return
+    end
+    
+    debug_log("✓ File opened successfully, writing config...")
+    
+    -- Write configuration with detailed logging
+    local write_count = 0
+    local keys_order = {
+        "jimaku_api_key",
+        "SUBTITLE_CACHE_DIR",
+        "JIMAKU_AUTO_DOWNLOAD",
+        "JIMAKU_MAX_SUBS",
+        "JIMAKU_ITEMS_PER_PAGE",
+        "JIMAKU_MENU_TIMEOUT",
+        "JIMAKU_FONT_SIZE",
+        "JIMAKU_HIDE_SIGNS",
+        "LOG_ONLY_ERRORS",
+        "INITIAL_OSD_MESSAGES",
+        "LOG_FILE"
+    }
+    
+    for _, key in ipairs(keys_order) do
+        local value = script_opts[key]
+        if value ~= nil then
+            local line = ""
             if type(value) == "boolean" then
-                f:write(key .. "=" .. (value and "yes" or "no") .. "\n")
+                line = key .. "=" .. (value and "yes" or "no")
             elseif type(value) == "string" then
-                f:write(key .. "=" .. value .. "\n")
+                line = key .. "=" .. value
             elseif type(value) == "number" then
-                f:write(key .. "=" .. tostring(value) .. "\n")
+                line = key .. "=" .. tostring(value)
+            end
+            
+            if line ~= "" then
+                local success, write_err = pcall(function() f:write(line .. "\n") end)
+                if success then
+                    write_count = write_count + 1
+                    -- Mask API key in log
+                    local log_line = (key == "jimaku_api_key") and (key .. "=" .. mask_api_key(value)) or line
+                    debug_log(string.format("  Wrote: %s", log_line))
+                else
+                    debug_log(string.format("  FAILED to write: %s (error: %s)", key, tostring(write_err)), true)
+                end
             end
         end
-        f:close()
-        mp.osd_message("✓ Settings saved to jimaku.conf", 2)
-        debug_log("Configuration saved to " .. config_path)
-    else
-        mp.osd_message("✗ Failed to save settings", 3)
-        debug_log("Failed to save configuration", true)
     end
+    
+    -- Close file
+    local close_success, close_err = pcall(function() f:close() end)
+    if close_success then
+        debug_log("✓ File closed successfully")
+    else
+        debug_log("✗ Error closing file: " .. tostring(close_err), true)
+    end
+    
+    -- Verify file was written
+    debug_log("Verifying written file...")
+    local verify = io.open(config_path, "r")
+    if verify then
+        local content = verify:read("*all")
+        verify:close()
+        debug_log("✓ File verification successful")
+        debug_log("File size: " .. #content .. " bytes")
+        debug_log("Lines written: " .. write_count)
+        debug_log("File content preview (API key masked):")
+        for line in content:gmatch("[^\r\n]+") do
+            if line:match("^jimaku_api_key=") then
+                local key_val = line:match("^jimaku_api_key=(.*)$")
+                debug_log("  jimaku_api_key=" .. mask_api_key(key_val))
+            else
+                debug_log("  " .. line)
+            end
+        end
+    else
+        debug_log("✗ File verification FAILED - file not readable after write!", true)
+    end
+    
+    mp.osd_message("✓ Settings saved to jimaku.conf\n(" .. write_count .. " settings)", 3)
+    debug_log("Configuration saved to " .. config_path)
+    debug_log("========== SAVE CONFIG DEBUG END (SUCCESS) ==========")
 end
 -------------------------------------------------------------------------------
 -- CUMULATIVE EPISODE CALCULATION
@@ -4028,6 +4232,9 @@ if not STANDALONE_MODE then
     load_ANILIST_CACHE()
     load_JIMAKU_CACHE()
     
+    -- Load preferred groups from cache
+    JIMAKU_PREFERRED_GROUPS = load_preferred_groups()
+    
     -- Keybind 'A' to trigger the search
     mp.add_key_binding("A", "anilist-search", search_anilist)
     
@@ -4060,6 +4267,7 @@ if not STANDALONE_MODE then
                     end
                 end
                 debug_log("Updated preferred groups list")
+                save_preferred_groups()
                 mp.osd_message("Added groups to list", 3)
             end
         end
