@@ -253,7 +253,7 @@ close_menu = function()
         "menu-up", "menu-down", "menu-left", "menu-right", "menu-select", "menu-close",
         "menu-up-alt", "menu-down-alt", "menu-select-alt", "menu-back-alt", "menu-quit-alt",
         "menu-wheel-up", "menu-wheel-down", "menu-mbtn-left", "menu-mbtn-right",
-        "menu-search-slash", "menu-filter-f", "menu-clear-x"
+        "menu-search-slash", "menu-filter-f", "menu-clear-x", "menu-delete-ctrl-del"
     }
     for _, name in ipairs(keys_to_remove) do
         mp.remove_key_binding(name)
@@ -410,31 +410,63 @@ bind_menu_keys = function()
     mp.add_forced_key_binding("RIGHT", "menu-right", handle_menu_right)
     mp.add_forced_key_binding("ENTER", "menu-select", handle_menu_select)
     mp.add_forced_key_binding("ESC", "menu-close", pop_menu)
+
     -- Alternative keys (no overlap)
     mp.add_forced_key_binding("k", "menu-up-alt", handle_menu_up)
     mp.add_forced_key_binding("j", "menu-down-alt", handle_menu_down)
     mp.add_forced_key_binding("l", "menu-select-alt", handle_menu_select)
     mp.add_forced_key_binding("h", "menu-back-alt", pop_menu)
     mp.add_forced_key_binding("q", "menu-quit-alt", close_menu)
+
     -- Global actions
     local function trigger_filter()
-        if menu_state.active and menu_state.stack[#menu_state.stack].title:match("Browse Jimaku Subs") then
+        local current = menu_state.stack[#menu_state.stack]
+        if menu_state.active and current and current.title:match("Browse Jimaku Subs") then
             mp.osd_message("Enter filter/episode in console", 3)
             mp.commandv("script-message-to", "console", "type", "script-message jimaku-browser-filter ")
         end
     end
+
     mp.add_forced_key_binding("/", "menu-search-slash", trigger_filter)
     mp.add_forced_key_binding("f", "menu-filter-f", trigger_filter)
-    mp.add_forced_key_binding("x", "menu-clear-x", function()
-        if menu_state.active and menu_state.stack[#menu_state.stack].title:match("Browse Jimaku Subs") then
+
+    -- Fixed: Wrapped the floating logic into a proper binding (assuming 'BACKSPACE' to reset filter)
+    mp.add_forced_key_binding("BS", "menu-filter-reset", function()
+        local current = menu_state.stack[#menu_state.stack]
+        if menu_state.active and current and current.title:match("Browse Jimaku Subs") then
             apply_browser_filter(nil)
         end
     end)
+
+    -- Remove release group
+    mp.add_forced_key_binding("Ctrl+DEL", "menu-delete-ctrl-del", function()
+        local current = menu_state.stack[#menu_state.stack]
+        if menu_state.active and current and current.title == "Release Group Priority" then
+            local idx = current.selected
+            if idx > 0 and idx <= #JIMAKU_PREFERRED_GROUPS then
+                local group_name = JIMAKU_PREFERRED_GROUPS[idx].name
+                table.remove(JIMAKU_PREFERRED_GROUPS, idx)
+                save_preferred_groups()
+                mp.osd_message("Removed: " .. group_name, 2)
+                
+                pop_menu()
+                
+                local new_idx = idx
+                local count = #JIMAKU_PREFERRED_GROUPS
+                if new_idx > count then new_idx = count end
+                if new_idx < 1 then new_idx = 1 end
+                
+                show_preferred_groups_menu(new_idx)
+            end
+        end
+    end)
+
     -- Mouse bindings
     mp.add_forced_key_binding("WHEEL_UP", "menu-wheel-up", handle_menu_up)
     mp.add_forced_key_binding("WHEEL_DOWN", "menu-wheel-down", handle_menu_down)
     mp.add_forced_key_binding("MBTN_LEFT", "menu-mbtn-left", handle_menu_select)
     mp.add_forced_key_binding("MBTN_RIGHT", "menu-mbtn-right", pop_menu)
+
     for i = 0, 9 do
         mp.add_forced_key_binding(tostring(i), "menu-num-" .. i, function() handle_menu_num(i) end)
     end
@@ -993,7 +1025,7 @@ show_preferred_groups_menu = function(selected)
             save_preferred_groups()
         end
     end
-    local footer = "←/→ Change Priority | ENTER Toggle | 0 Back"
+    local footer = "←/→ Change Priority | ENTER Toggle | Ctrl+DEL Remove | 0 Back"
     push_menu("Release Group Priority", items, footer, on_left, on_right, selected)
 end
 -- Cache Submenu
