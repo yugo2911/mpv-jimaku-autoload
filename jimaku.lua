@@ -13,7 +13,9 @@ local script_opts = {
     JIMAKU_MENU_TIMEOUT  = 30,
     JIMAKU_FONT_SIZE     = 16,
     INITIAL_OSD_MESSAGES = true,
-    LOG_FILE             = true
+    LOG_FILE             = true,
+    USE_ANILIST_API      = true,
+    USE_JIMAKU_API       = true,
 }
 -- 2. DETERMINE PATHS
 CONFIG_DIR = STANDALONE_MODE and "." or mp.command_native({"expand-path", "~~/"})
@@ -187,12 +189,12 @@ update_sub_index = function()
     return all_subs
 end
 -- Fast retrieval (O(1) Disk access)
-get_indexed_subs = function()
+get_indexed_subs = function(auto_create)
     local data = load_persistent_cache(INDEX_FILE)
-    if not data or not data.files then 
+    if (not data or not data.files) and auto_create then 
         return update_sub_index() 
     end
-    return data.files
+    return data and data.files or {}
 end
 -------------------------------------------------------------------------------
 -- MENU SYSTEM STATE
@@ -2651,61 +2653,152 @@ end
 -- HELPER: Recursively scan directory for subtitle files with filtering
 -- CRITICAL: Only scans within the specified base_dir to prevent cache pollution
 -------------------------------------------------------------------------------
-local function scan_for_subtitles(dir_path, base_dir, target_title, target_episode, target_season, max_depth)
-    max_depth = max_depth or 3  -- Prevent infinite recursion
+-------------------------------------------------------------------------------
+-- HELPER: Read and parse .kitsuinfo.json from a directory
+-------------------------------------------------------------------------------
+local function read_kitsuinfo(dir_path)
+    local info_path = dir_path .. "/.kitsuinfo.json"
+    local f = io.open(info_path, "r")
+    if not f then return nil end
+    
+    local content = f:read("*all")
+    f:close()
+    
+    if not content or content == "" then return nil end
+    local ok, data = pcall(utils.parse_json, content)
+    
+    if ok and data then
+        return data
+    end
+    return nil
+end
+
+-------------------------------------------------------------------------------
+-- HELPER: Recursively scan directory for subtitle files with filtering
+-- CRITICAL: Only scans within the specified base_dir to prevent cache pollution
+-------------------------------------------------------------------------------
+local function scan_for_subtitles(dir_path, base_dir, target_title, target_episode, target_season, max_depth, target_anilist_id)
+    max_depth = max_depth or 3
     if max_depth <= 0 then return {} end
-    -- SECURITY CHECK: Ensure we're not scanning outside the extraction directory
+    
     if not is_within_directory(dir_path, base_dir) then
         debug_log(string.format("SECURITY: Refusing to scan outside base directory: %s", dir_path), true)
         return {}
     end
+    
     local subtitle_files = {}
-    local items = utils.readdir(dir_path, "all")
-    if not items then
-        debug_log("Cannot read directory: " .. dir_path, true)
-        return subtitle_files
-    end
-    for _, item in ipairs(items) do
-        local full_path = dir_path .. "/" .. item
-        -- SECURITY CHECK: Ensure the full path is still within base_dir
-        if not is_within_directory(full_path, base_dir) then
-            debug_log(string.format("SECURITY: Skipping path outside base: %s", full_path), true)
-            goto continue
-        end
-        local ext = item:match("%.([^%.]+)$")
-        -- Check if it's a subtitle file
-        if ext then
-            ext = ext:lower()
-            if ext == "ass" or ext == "srt" or ext == "vtt" or ext == "sub" then
-                -- Apply relevance filter
-                local relevant, reason = is_relevant_subtitle(item, target_title, target_episode, target_season)
-                if relevant then
-                    table.insert(subtitle_files, {
-                        path = full_path,
-                        name = item,
-                        episode = extract_episode_from_filename(item)
-                    })
-                    debug_log(string.format("Accepted: %s (%s)", item, reason))
-                else
-                    debug_log(string.format("Filtered out: %s (%s)", item, reason))
+    
+    -- 1. Scan Files directly (no need for file_info)
+    local files = utils.readdir(dir_path, "files")
+    if files then
+        for _, item in ipairs(files) do
+            local ext = item:match("%.([^%.]+)$")
+            if ext then
+                ext = ext:lower()
+                if ext == "ass" or ext == "srt" or ext == "vtt" or ext == "sub" then
+                    local relevant, reason = is_relevant_subtitle(item, target_title, target_episode, target_season)
+                    if relevant then
+                        table.insert(subtitle_files, {
+                            path = dir_path .. "/" .. item,
+                            name = item,
+                            episode = extract_episode_from_filename(item)
+                        })
+                        debug_log(string.format("Accepted: %s (%s)", item, reason))
+                    end
                 end
             end
         end
-        -- Check if it's a directory (recursively scan)
-        local attr = utils.file_info(full_path)
-        if attr and attr.is_dir then
-            -- Skip directory names that indicate they're from other extractions
-            if item:match("^extracted_") then
-                debug_log(string.format("Skipping nested extraction directory: %s", item))
-                goto continue
+    else
+        debug_log("Cannot read directory files: " .. dir_path, true)
+    end
+    
+    -- 2. Scan Subdirectories with SMART FILTERING
+    local dirs = utils.readdir(dir_path, "dirs")
+    if dirs then
+        local recurse_dirs = {}
+        -- HEURISTIC: If directory contains many folders (>50), it's likely a library root.
+        -- We should only enter subfolders that fuzzy-match the target title.
+        local use_smart_filter = #dirs > 50 and target_title and target_title ~= ""
+        
+        -- Filter logic
+        local candidate_dirs = {}
+        if use_smart_filter then
+            debug_log(string.format("Large directory detected (%d subdirs). Using smart filtering for '%s'", #dirs, target_title))
+            local search_terms = {}
+            for w in target_title:lower():gmatch("%w+") do
+                if #w > 2 then table.insert(search_terms, w) end
             end
-            local sub_files = scan_for_subtitles(full_path, base_dir, target_title, target_episode, target_season, max_depth - 1)
+            
+            for _, d in ipairs(dirs) do
+                if d ~= "." and d ~= ".." and not d:match("^extracted_") then
+                    local d_lower = d:lower()
+                    local match = false
+                    if #search_terms > 0 then
+                        for _, term in ipairs(search_terms) do
+                            if d_lower:find(term, 1, true) then match = true; break end
+                        end
+                    else
+                        match = true
+                    end
+                    if match then table.insert(candidate_dirs, d) end
+                end
+            end
+            debug_log(string.format("Smart Filter: Reduced %d dirs to %d candidate(s)", #dirs, #candidate_dirs))
+        else
+            -- Small directory, consider all non-special folders
+            for _, d in ipairs(dirs) do
+                if d ~= "." and d ~= ".." and not d:match("^extracted_") then
+                    table.insert(candidate_dirs, d)
+                end
+            end
+        end
+
+        -- Process Candidate Directories (Check metadata)
+        for _, d in ipairs(candidate_dirs) do
+            local full_path = dir_path .. "/" .. d
+            local should_enter = true
+            
+            -- CHECK .kitsuinfo.json for precise matching
+            local kitsu = read_kitsuinfo(full_path)
+            if kitsu then
+                if target_anilist_id and kitsu.anilist_id then
+                    -- ID MATCH: If IDs don't match, SKIP this folder (unless it's a very similar ID? No, IDs should be exact)
+                    if tonumber(kitsu.anilist_id) ~= tonumber(target_anilist_id) then
+                        should_enter = false
+                        -- debug_log(string.format("Kitsunekko: Skipping '%s' (ID %s != %s)", d, kitsu.anilist_id, target_anilist_id))
+                    else
+                        debug_log(string.format("Kitsunekko: ID MATCH for '%s' (ID: %s)", d, kitsu.anilist_id))
+                    end
+                elseif target_title then
+                    -- NAME MATCH: Check English/Japanese names if ID not available
+                    local name_match = false
+                    local search_lower = target_title:lower()
+                    if kitsu.english_name and kitsu.english_name:lower():find(search_lower, 1, true) then name_match = true end
+                    if kitsu.japanese_name and kitsu.japanese_name:lower():find(search_lower, 1, true) then name_match = true end
+                    
+                    -- If we're already inside a candidate folder (passed smart filter), 
+                    -- allow entry even if metadata name doesn't perfectly match (could be synonyms).
+                    -- But if metadata name strictly contradicts, maybe valid check?
+                    -- For now, metadata existence confirms it is an anime folder, so trusting "should_enter" as true is safe
+                    -- unless we wanted to be stricter.
+                    -- Let's stick to: if ID is provided, enforce it. If not, just proceed.
+                end
+            end
+            
+            if should_enter then
+                table.insert(recurse_dirs, d)
+            end
+        end
+        
+        -- Recurse into selected directories
+        for _, d in ipairs(recurse_dirs) do
+            local sub_files = scan_for_subtitles(dir_path .. "/" .. d, base_dir, target_title, target_episode, target_season, max_depth - 1, target_anilist_id)
             for _, sf in ipairs(sub_files) do
                 table.insert(subtitle_files, sf)
             end
         end
-        ::continue::
     end
+    
     return subtitle_files
 end
 -------------------------------------------------------------------------------
@@ -3307,7 +3400,7 @@ end
 -- OFFLINE FALLBACK: Search local subtitle cache when AniList/Jimaku unavailable
 -- Scans SUBTITLE_CACHE_DIR for matching subtitle files based on parsed title/episode
 -------------------------------------------------------------------------------
-search_local_subtitle_cache = function(parsed, is_auto)
+search_local_subtitle_cache = function(parsed, is_auto, anilist_id)
     if not parsed or not parsed.title then
         debug_log("Offline search: No parsed title available", true)
         return false
@@ -3315,8 +3408,8 @@ search_local_subtitle_cache = function(parsed, is_auto)
     local target_title = parsed.title
     local target_episode = tonumber(parsed.episode) or 1
     local target_season = parsed.season or 1
-    debug_log(string.format("Offline search: Looking for '%s' S%d E%d in %s", 
-        target_title, target_season, target_episode, SUBTITLE_CACHE_DIR))
+    debug_log(string.format("Offline search: Looking for '%s' S%d E%d in %s (ID: %s)", 
+        target_title, target_season, target_episode, SUBTITLE_CACHE_DIR, anilist_id or "N/A"))
     -- Scan the subtitle cache directory for matching files
     local subtitle_files = scan_for_subtitles(
         SUBTITLE_CACHE_DIR, 
@@ -3324,7 +3417,8 @@ search_local_subtitle_cache = function(parsed, is_auto)
         target_title, 
         target_episode, 
         target_season,
-        2  -- max_depth
+        2,  -- max_depth
+        anilist_id -- Pass AniList ID for precise folder verification
     )
     if #subtitle_files == 0 then
         debug_log("Offline search: No matching subtitles found in local cache", true)
@@ -3548,14 +3642,18 @@ search_anilist = function(is_auto)
             )
         else
             -- AniList match found but no Jimaku entry exists
-            local no_subs_msg = string.format(
-                "No subtitles on Jimaku for:\n%s (AniList ID: %d)\n",
-                selected.title.romaji,
-                selected.id
-            )
-            debug_log(string.format("No Jimaku entry found for '%s' (ID: %d)", 
-                selected.title.romaji, selected.id), true)
-            conditional_osd(no_subs_msg, 7, is_auto)
+            -- TRY LOCAL SEARCH with confirmed ID
+            debug_log(string.format("No Jimaku entry found. Trying local search for ID %d...", selected.id))
+            local local_success = search_local_subtitle_cache(parsed, is_auto, selected.id)
+            
+            if not local_success then
+                local no_subs_msg = string.format(
+                    "No subtitles on Jimaku or Local for:\n%s (ID: %d)\n",
+                    selected.title.romaji,
+                    selected.id
+                )
+                conditional_osd(no_subs_msg, 7, is_auto)
+            end
         end
     else
         -- OFFLINE FALLBACK: Search local subtitle cache when AniList/Jimaku are unavailable
