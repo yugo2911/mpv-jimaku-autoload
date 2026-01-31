@@ -3397,6 +3397,64 @@ local function get_search_title(parsed)
     return search_title
 end
 -- Main search function with integrated smart matching
+-------------------------------------------------------------------------------
+-- OFFLINE FALLBACK: Search local subtitle cache when AniList/Jimaku unavailable
+-- Scans SUBTITLE_CACHE_DIR for matching subtitle files based on parsed title/episode
+-------------------------------------------------------------------------------
+search_local_subtitle_cache = function(parsed, is_auto)
+    if not parsed or not parsed.title then
+        debug_log("Offline search: No parsed title available", true)
+        return false
+    end
+    local target_title = parsed.title
+    local target_episode = tonumber(parsed.episode) or 1
+    local target_season = parsed.season or 1
+    debug_log(string.format("Offline search: Looking for '%s' S%d E%d in %s", 
+        target_title, target_season, target_episode, SUBTITLE_CACHE_DIR))
+    -- Scan the subtitle cache directory for matching files
+    local subtitle_files = scan_for_subtitles(
+        SUBTITLE_CACHE_DIR, 
+        SUBTITLE_CACHE_DIR, 
+        target_title, 
+        target_episode, 
+        target_season,
+        2  -- max_depth
+    )
+    if #subtitle_files == 0 then
+        debug_log("Offline search: No matching subtitles found in local cache", true)
+        return false
+    end
+    -- Sort by episode number
+    sort_subtitles_by_episode(subtitle_files)
+    debug_log(string.format("Offline search: Found %d matching subtitle(s) in local cache", #subtitle_files))
+    -- Load the best matches (up to JIMAKU_MAX_SUBS)
+    local max_to_load = math.min(#subtitle_files, JIMAKU_MAX_SUBS or 5)
+    local loaded_count = 0
+    for i = 1, max_to_load do
+        local sub_info = subtitle_files[i]
+        local flag = (i == 1) and "select" or "auto"
+        local ep_info = sub_info.episode and string.format(" [Ep %d]", sub_info.episode) or ""
+        debug_log(string.format("Offline loading [%d/%d]%s: %s", 
+            i, max_to_load, ep_info, sub_info.name))
+        local success, err = pcall(function()
+            mp.commandv("sub-add", sub_info.path, flag)
+        end)
+        if success then
+            loaded_count = loaded_count + 1
+            table.insert(menu_state.loaded_subs_files, sub_info.name)
+        else
+            debug_log(string.format("Offline search: Failed to load %s (%s)", sub_info.name, err), true)
+        end
+    end
+    if loaded_count > 0 then
+        local msg = string.format("✓ OFFLINE: Loaded %d subtitle(s) from cache\n%s", 
+            loaded_count, subtitle_files[1].name)
+        conditional_osd(msg, 5, is_auto)
+        debug_log(string.format("Offline search: Successfully loaded %d subtitle(s)", loaded_count))
+        return true
+    end
+    return false
+end
 search_anilist = function(is_auto)
     -- Try media-title first (for streams/URLs), then filename (for local files)
     local title_source = mp.get_property("media-title") or mp.get_property("filename")
@@ -3594,8 +3652,13 @@ search_anilist = function(is_auto)
             conditional_osd(no_subs_msg, 7, is_auto)
         end
     else
+        -- OFFLINE FALLBACK: Search local subtitle cache when AniList/Jimaku are unavailable
         debug_log("FAILURE: No matches found for " .. parsed.title, true)
-        conditional_osd("AniList: No match found.", 3, is_auto)
+        debug_log("Attempting offline fallback: scanning local subtitle cache...")
+        local offline_success = search_local_subtitle_cache(parsed, is_auto)
+        if not offline_success then
+            conditional_osd("AniList: No match found.\nOffline cache search also failed.", 3, is_auto)
+        end
     end
 end
 -- Initialize
