@@ -725,20 +725,21 @@ show_download_menu = function()
             end
         },
         {
-            text = "3. Reload Current Match", 
-            disabled = not has_match, 
-            action = reload_subtitles_action
+            text = "2. Manual AniList Search", 
+            action = manual_search_action
         },
         {
-            text = "4. Manual Jimaku Search", 
+            text = "3. Manual Jimaku Search", 
             action = function()
                 mp.osd_message("Type search in console (press ~)", 3)
                 mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
             end
         },
         {
-            text = "5. Manual AniList Search", 
-            action = manual_search_action
+
+            text = "5. Reload Current Match", 
+            disabled = not has_match, 
+            action = reload_subtitles_action
         },
         
         {text = "0. Back to Main Menu", action = pop_menu},
