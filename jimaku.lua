@@ -15,7 +15,6 @@ local script_opts = {
     JIMAKU_MENU_TIMEOUT  = 30,
     JIMAKU_FONT_SIZE     = 16,
     INITIAL_OSD_MESSAGES = true,
-    -- Disable log file by default
     LOG_FILE             = false
 }
 
@@ -129,6 +128,50 @@ load_persistent_cache = function(file_path)
     end
     debug_log("Cache Debug: MISS - No valid cache file found.")
     return {}
+end
+
+-- TODO INDEX FILE LOCATIONS INSTEAD OF DUMB SCAN ON BOOT
+-------------------------------------------------------------------------------
+-- INDEXING UTILITIES (O(n) Walk / O(1) Boot)
+-------------------------------------------------------------------------------
+local INDEX_FILE = CONFIG_DIR .. "/cache/sub_index.json"
+
+-- Recursive folder walk (O(n))
+local function walk_directory(path)
+    local files = {}
+    local entries = utils.readdir(path, "files")
+    local dirs = utils.readdir(path, "dirs")
+
+    for _, file in ipairs(entries or {}) do
+        if file:match("%.ass$") or file:match("%.srt$") then
+            table.insert(files, path .. "/" .. file)
+        end
+    end
+
+    for _, dir in ipairs(dirs or {}) do
+        if dir ~= "." and dir ~= ".." then
+            local sub_files = walk_directory(path .. "/" .. dir)
+            for _, f in ipairs(sub_files) do table.insert(files, f) end
+        end
+    end
+    return files
+end
+
+-- Refresh the flat index file
+update_sub_index = function()
+    debug_log("Refreshing subtitle index...")
+    local all_subs = walk_directory(SUBTITLE_CACHE_DIR)
+    save_persistent_cache(INDEX_FILE, { last_updated = os.time(), files = all_subs })
+    return all_subs
+end
+
+-- Fast retrieval (O(1) Disk access)
+get_indexed_subs = function()
+    local data = load_persistent_cache(INDEX_FILE)
+    if not data or not data.files then 
+        return update_sub_index() 
+    end
+    return data.files
 end
 
 -------------------------------------------------------------------------------

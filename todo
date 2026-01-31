@@ -1,6 +1,5 @@
-manual searches just quit and not go back to main menu
 fix config saving via menu
-fix archive files
+fix archive files, make sure we read deeper than 1 level
 confidence feedback is not useful dont show it to users
 asyncrous subtitile downloading one the time is retarded
 broke subtitle browser jump to current episode broken again......
