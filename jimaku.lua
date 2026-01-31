@@ -152,6 +152,15 @@ end
 -- INDEXING UTILITIES (O(n) Walk / O(1) Boot)
 -------------------------------------------------------------------------------
 local INDEX_FILE = CONFIG_DIR .. "/cache/sub_index.json"
+
+-- Helper function to count table entries properly
+local function count_table_entries(tbl)
+    if not tbl or type(tbl) ~= "table" then return 0 end
+    local count = 0
+    for _ in pairs(tbl) do count = count + 1 end
+    return count
+end
+
 -- Recursive folder walk (O(n))
 local function walk_directory(path)
     local files = {}
@@ -314,25 +323,14 @@ local function conditional_osd(message, duration, is_auto)
 end
 -- Navigation functions
 -- Key handlers
-handle_menu_up = function()
+-- Generic navigation handler
+local function handle_menu_nav(direction)
     if not menu_state.active or #menu_state.stack == 0 then return end
     local context = menu_state.stack[#menu_state.stack]
     local initial_selected = context.selected
     repeat
-        context.selected = context.selected - 1
+        context.selected = context.selected + direction
         if context.selected < 1 then context.selected = #context.items end
-        local item = context.items[context.selected]
-        -- Skip if it's a header OR if it's disabled AND has no action (labels)
-        local is_label = item.header or (item.disabled and not item.action)
-    until not is_label or context.selected == initial_selected
-    render_menu_osd()
-end
-handle_menu_down = function()
-    if not menu_state.active or #menu_state.stack == 0 then return end
-    local context = menu_state.stack[#menu_state.stack]
-    local initial_selected = context.selected
-    repeat
-        context.selected = context.selected + 1
         if context.selected > #context.items then context.selected = 1 end
         local item = context.items[context.selected]
         -- Skip if it's a header OR if it's disabled AND has no action (labels)
@@ -340,6 +338,9 @@ handle_menu_down = function()
     until not is_label or context.selected == initial_selected
     render_menu_osd()
 end
+
+handle_menu_up = function() handle_menu_nav(-1) end
+handle_menu_down = function() handle_menu_nav(1) end
 handle_menu_left = function()
     if not menu_state.active or #menu_state.stack == 0 then return end
     local context = menu_state.stack[#menu_state.stack]
@@ -490,83 +491,37 @@ download_selected_subtitle_action = function(file)
         mp.osd_message("Error: Jimaku API key not set", 3)
         return
     end
+
     local subtitle_path = SUBTITLE_CACHE_DIR .. "/" .. file.name
     mp.osd_message("Downloading selected subtitle...", 30)
+
     local download_args = {
         "curl", "-s", "-L", "-o", subtitle_path,
         "-H", "Authorization: " .. JIMAKU_API_KEY,
         file.url
     }
+
     local download_result = mp.command_native({
         name = "subprocess",
         playback_only = false,
         args = download_args
     })
+
     if download_result.status == 0 then
-        if is_archive_file(file.name) then
-            handle_archive_file(subtitle_path, "select")
-        else
-            mp.commandv("sub-add", subtitle_path, "select")
-            mp.osd_message("✓ Loaded: " .. file.name, 4)
-            -- Update state
-            table.insert(menu_state.loaded_subs_files, file.name)
-            menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+        -- Logic for updating OSD if browser is active
+        local current_menu = menu_state.stack[#menu_state.stack]
+        if menu_state.active and current_menu and current_menu.title:match("Browse Jimaku Subs") then
+            local filter = menu_state.browser_filter
+            if filter then
+                mp.osd_message(string.format("Filter: '%s' (Press / to change)", filter), 3)
+            end
         end
-        -- Refresh browser to show checkmark
-        pop_menu()
-        show_subtitle_browser()
-    else
-        mp.osd_message("Download failed!", 3)
-    end
+    end -- Fixed: This 'end' was missing
 end
 -- Forward declarations to prevent nil reference errors
 local show_main_menu, show_download_menu
 -- 1. Main Menu
-show_main_menu = function()
-    if menu_state.active then
-        if #menu_state.stack > 1 then
-            while #menu_state.stack > 1 do table.remove(menu_state.stack) end
-            render_menu_osd()
-        else
-            close_menu()
-        end
-        return
-    end
-    menu_state.stack = {}
-    menu_state.active = false
-    local m = menu_state.current_match
-    local has_match = menu_state.jimaku_id ~= nil
-    local results_count = #menu_state.search_results
-    local results_hint = results_count > 0 and (results_count .. " found") or "No results"
-    local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
-                     or "Match: None (press 'A' to search)"
-    local items = {
-        {
-            text = "1. Browse All Available", 
-            hint = has_match and "View all files" or "No match yet", 
-            disabled = not has_match, 
-            action = function()
-                menu_state.browser_page = nil
-                show_subtitle_browser()
-            end
-        },
-        {
-            text = "2. Pick from Results", 
-            hint = results_hint, 
-            disabled = results_count == 0, 
-            action = function()
-                menu_state.search_results_page = 1
-                show_search_results_menu()
-            end
-        },
-        {text = "3. Download Subtitles", action = function() show_download_menu() end},
-        {text = "4. Search & Match",     action = function() show_search_menu() end},
-        {text = "5. Preferences",        action = function() show_preferences_menu() end},
-        {text = "6. Manage & Cleanup",   action = function() show_manage_menu() end},
-    }
-    local header = "JIMAKU SUBTITLE MANAGER\\N" .. status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
-    push_menu("Main Menu", items, nil, nil, nil, nil, header)
-end
+
 -- 1. Main Menu (Updated to point to consolidated menu)
 show_main_menu = function()
     if menu_state.active then
@@ -1046,11 +1001,7 @@ end
 -- Manage & Cleanup Menu (consolidates Cache + subtitle management)
 show_manage_menu = function()
     -- Calculate cache stats
-    local function count_table(tbl)
-        local count = 0
-        for _ in pairs(tbl) do count = count + 1 end
-        return count
-    end
+    local count_table = count_table_entries
     local anilist_count = count_table(ANILIST_CACHE)
     local jimaku_count = count_table(JIMAKU_CACHE)
     local episode_count = count_table(EPISODE_CACHE)
@@ -1101,20 +1052,7 @@ end
 -- Keep old name for compatibility
 show_cache_menu = show_manage_menu
 -- Create subtitle cache directory if it doesn't exist
-local function ensure_subtitle_cache()
-    if STANDALONE_MODE then
-        os.execute("mkdir -p " .. SUBTITLE_CACHE_DIR)
-    else
-        -- Use mpv's subprocess to avoid CMD window flash on Windows
-        local is_windows = package.config:sub(1,1) == '\\'
-        local args = is_windows and {"cmd", "/C", "mkdir", SUBTITLE_CACHE_DIR} or {"mkdir", "-p", SUBTITLE_CACHE_DIR}
-        mp.command_native({
-            name = "subprocess",
-            playback_only = false,
-            args = args
-        })
-    end
-end
+
 -- Create directory without CMD flash (cross-platform)
 local function ensure_directory(dir_path)
     if STANDALONE_MODE then
@@ -1130,152 +1068,89 @@ local function ensure_directory(dir_path)
         })
     end
 end
--- Helper function to count table entries properly
-local function count_table_entries(tbl)
-    if not tbl or type(tbl) ~= "table" then return 0 end
-    local count = 0
-    for _ in pairs(tbl) do count = count + 1 end
-    return count
+
+-- Generic runtime cache loader with logging
+local function load_runtime_cache(file_path, name)
+    if STANDALONE_MODE then 
+        debug_log(string.format("Cache Debug: STANDALONE_MODE - returning empty %s cache", name))
+        return {}
+    end
+    local f = io.open(file_path, "r")
+    if not f then
+        debug_log(string.format("%s cache file not found - will create on first search", name))
+        return {}
+    end
+    local content = f:read("*all")
+    f:close()
+    if not content or content == "" then
+        debug_log(string.format("%s cache file is empty", name))
+        return {}
+    end
+    local ok, data = pcall(utils.parse_json, content)
+    if not ok then
+        debug_log(string.format("Failed to parse %s cache file (corrupted JSON)", name), true)
+        return {}
+    end
+    if not data or type(data) ~= "table" then
+        debug_log(string.format("%s cache data is not a valid table", name))
+        return {}
+    end
+    local entry_count = count_table_entries(data)
+    debug_log(string.format("Loaded %s cache with %d entries (keys)", name, entry_count))
+    -- Log some sample cache keys for debugging
+    if entry_count > 0 then
+        local sample_keys = {}
+        for key, _ in pairs(data) do
+            table.insert(sample_keys, key)
+            if #sample_keys >= 3 then break end
+        end
+        debug_log(string.format("Sample cache keys: %s", table.concat(sample_keys, ", ")))
+    end
+    return data
 end
--- Improved load_ANILIST_CACHE with proper entry counting
+
+-- Generic runtime cache saver with logging
+local function save_runtime_cache(file_path, data, name)
+    if STANDALONE_MODE then 
+        debug_log("Cache Debug: STANDALONE_MODE - skipping save")
+        return 
+    end
+    local entry_count = count_table_entries(data)
+    debug_log(string.format("Saving %s cache with %d entries", name, entry_count))
+    if entry_count == 0 then
+        debug_log(string.format("Warning: Saving empty %s cache", name))
+    end
+    local f = io.open(file_path, "w")
+    if not f then
+        debug_log(string.format("Failed to open %s cache file for writing", name), true)
+        return
+    end
+    local ok, json = pcall(utils.format_json, data)
+    if not ok then
+        debug_log(string.format("Failed to serialize %s cache to JSON", name), true)
+        f:close()
+        return
+    end
+    f:write(json)
+    f:close()
+    debug_log(string.format("Successfully saved %s cache to %s", name, file_path))
+end
+
+-- Wrappers for specific caches
 local function load_ANILIST_CACHE()
-    if STANDALONE_MODE then 
-        debug_log("Cache Debug: STANDALONE_MODE - returning empty cache")
-        ANILIST_CACHE = {}
-        return 
-    end
-    local f = io.open(ANILIST_CACHE_FILE, "r")
-    if not f then
-        debug_log("AniList cache file not found - will create on first search")
-        ANILIST_CACHE = {}
-        return
-    end
-    local content = f:read("*all")
-    f:close()
-    if not content or content == "" then
-        debug_log("AniList cache file is empty")
-        ANILIST_CACHE = {}
-        return
-    end
-    local ok, data = pcall(utils.parse_json, content)
-    if not ok then
-        debug_log("Failed to parse AniList cache file (corrupted JSON)", true)
-        ANILIST_CACHE = {}
-        return
-    end
-    if not data or type(data) ~= "table" then
-        debug_log("AniList cache data is not a valid table")
-        ANILIST_CACHE = {}
-        return
-    end
-    ANILIST_CACHE = data
-    local entry_count = count_table_entries(ANILIST_CACHE)
-    debug_log(string.format("Loaded AniList cache with %d entries (keys)", entry_count))
-    -- Log some sample cache keys for debugging
-    if entry_count > 0 then
-        local sample_keys = {}
-        for key, _ in pairs(ANILIST_CACHE) do
-            table.insert(sample_keys, key)
-            if #sample_keys >= 3 then break end
-        end
-        debug_log(string.format("Sample cache keys: %s", table.concat(sample_keys, ", ")))
-    end
+    ANILIST_CACHE = load_runtime_cache(ANILIST_CACHE_FILE, "AniList")
 end
--- Improved load_JIMAKU_CACHE with proper entry counting
+
 local function load_JIMAKU_CACHE()
-    if STANDALONE_MODE then 
-        debug_log("Cache Debug: STANDALONE_MODE - returning empty cache")
-        JIMAKU_CACHE = {}
-        return 
-    end
-    local f = io.open(JIMAKU_CACHE_FILE, "r")
-    if not f then
-        debug_log("Jimaku cache file not found - will create on first search")
-        JIMAKU_CACHE = {}
-        return
-    end
-    local content = f:read("*all")
-    f:close()
-    if not content or content == "" then
-        debug_log("Jimaku cache file is empty")
-        JIMAKU_CACHE = {}
-        return
-    end
-    local ok, data = pcall(utils.parse_json, content)
-    if not ok then
-        debug_log("Failed to parse Jimaku cache file (corrupted JSON)", true)
-        JIMAKU_CACHE = {}
-        return
-    end
-    if not data or type(data) ~= "table" then
-        debug_log("Jimaku cache data is not a valid table")
-        JIMAKU_CACHE = {}
-        return
-    end
-    JIMAKU_CACHE = data
-    local entry_count = count_table_entries(JIMAKU_CACHE)
-    debug_log(string.format("Loaded Jimaku cache with %d entries (keys)", entry_count))
-    -- Log some sample cache keys for debugging
-    if entry_count > 0 then
-        local sample_keys = {}
-        for key, _ in pairs(JIMAKU_CACHE) do
-            table.insert(sample_keys, key)
-            if #sample_keys >= 3 then break end
-        end
-        debug_log(string.format("Sample cache keys: %s", table.concat(sample_keys, ", ")))
-    end
+    JIMAKU_CACHE = load_runtime_cache(JIMAKU_CACHE_FILE, "Jimaku")
 end
--- Improved save_ANILIST_CACHE with proper entry counting
+
 local function save_ANILIST_CACHE()
-    if STANDALONE_MODE then 
-        debug_log("Cache Debug: STANDALONE_MODE - skipping save")
-        return 
-    end
-    local entry_count = count_table_entries(ANILIST_CACHE)
-    debug_log(string.format("Saving AniList cache with %d entries", entry_count))
-    if entry_count == 0 then
-        debug_log("Warning: Saving empty AniList cache")
-    end
-    local f = io.open(ANILIST_CACHE_FILE, "w")
-    if not f then
-        debug_log("Failed to open AniList cache file for writing", true)
-        return
-    end
-    local ok, json = pcall(utils.format_json, ANILIST_CACHE)
-    if not ok then
-        debug_log("Failed to serialize AniList cache to JSON", true)
-        f:close()
-        return
-    end
-    f:write(json)
-    f:close()
-    debug_log(string.format("Successfully saved AniList cache to %s", ANILIST_CACHE_FILE))
+    save_runtime_cache(ANILIST_CACHE_FILE, ANILIST_CACHE, "AniList")
 end
--- Improved save_JIMAKU_CACHE with proper entry counting
+
 local function save_JIMAKU_CACHE()
-    if STANDALONE_MODE then 
-        debug_log("Cache Debug: STANDALONE_MODE - skipping save")
-        return 
-    end
-    local entry_count = count_table_entries(JIMAKU_CACHE)
-    debug_log(string.format("Saving Jimaku cache with %d entries", entry_count))
-    if entry_count == 0 then
-        debug_log("Warning: Saving empty Jimaku cache")
-    end
-    local f = io.open(JIMAKU_CACHE_FILE, "w")
-    if not f then
-        debug_log("Failed to open Jimaku cache file for writing", true)
-        return
-    end
-    local ok, json = pcall(utils.format_json, JIMAKU_CACHE)
-    if not ok then
-        debug_log("Failed to serialize Jimaku cache to JSON", true)
-        f:close()
-        return
-    end
-    f:write(json)
-    f:close()
-    debug_log(string.format("Successfully saved Jimaku cache to %s", JIMAKU_CACHE_FILE))
+    save_runtime_cache(JIMAKU_CACHE_FILE, JIMAKU_CACHE, "Jimaku")
 end
 save_config_to_file = function()
     debug_log("========== SAVE CONFIG DEBUG START ==========")
@@ -3664,7 +3539,7 @@ end
 -- Initialize
 if not STANDALONE_MODE then
     -- Create subtitle cache directory
-    ensure_subtitle_cache()
+    ensure_directory(SUBTITLE_CACHE_DIR)
     -- Note: API key is now loaded only from jimaku.conf via script_opts
     -- Log API key status
     if JIMAKU_API_KEY then
