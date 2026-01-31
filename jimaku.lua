@@ -3358,7 +3358,11 @@ mp.register_script_message("jimaku-search", function(query)
                         season = 1 
                     }
                     menu_state.browser_files = nil
-                    close_menu()
+                    
+                    -- 1. Remove the search results from the stack
+                    pop_menu() 
+                    
+                    -- 2. Open the browser (it will now be on top of the Search/Main menu)
                     show_subtitle_browser()
                 end
             })
