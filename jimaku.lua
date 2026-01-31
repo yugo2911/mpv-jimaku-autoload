@@ -2744,15 +2744,26 @@ local function scan_for_subtitles(dir_path, base_dir, target_title, target_episo
             for _, d in ipairs(dirs) do
                 if d ~= "." and d ~= ".." and not d:match("^extracted_") then
                     local d_lower = d:lower()
-                    local match = false
-                    if #search_terms > 0 then
-                        for _, term in ipairs(search_terms) do
-                            if d_lower:find(term, 1, true) then match = true; break end
-                        end
+                    
+                    -- Structural Whitelist: Always enter these common organization folders
+                    local is_structural = d_lower == "anime" or d_lower == "tv" or d_lower == "movies" or d_lower == "movie" or
+                                          d_lower:match("anime_") or d_lower:match("_tv$") or d_lower:match("^season") or 
+                                          d:len() <= 3  -- Allow "A", "09", "TV" etc
+                    
+                    if is_structural then
+                         table.insert(candidate_dirs, d)
                     else
-                        match = true
+                        -- Standard Fuzzy Match
+                        local match = false
+                        if #search_terms > 0 then
+                            for _, term in ipairs(search_terms) do
+                                if d_lower:find(term, 1, true) then match = true; break end
+                            end
+                        else
+                            match = true
+                        end
+                        if match then table.insert(candidate_dirs, d) end
                     end
-                    if match then table.insert(candidate_dirs, d) end
                 end
             end
             debug_log(string.format("Smart Filter: Reduced %d dirs to %d candidate(s)", #dirs, #candidate_dirs))
@@ -3429,7 +3440,7 @@ search_local_subtitle_cache = function(parsed, is_auto, anilist_id)
         target_title, 
         target_episode, 
         target_season,
-        2,  -- max_depth
+        4,  -- max_depth (Increased to 4 to support nested libraries e.g. subtitles/anime_tv/show/file)
         anilist_id -- Pass AniList ID for precise folder verification
     )
     if #subtitle_files == 0 then
