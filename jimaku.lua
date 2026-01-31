@@ -289,16 +289,32 @@ end
 handle_menu_up = function()
     if not menu_state.active or #menu_state.stack == 0 then return end
     local context = menu_state.stack[#menu_state.stack]
-    context.selected = context.selected - 1
-    if context.selected < 1 then context.selected = #context.items end
+    local initial_selected = context.selected
+    
+    repeat
+        context.selected = context.selected - 1
+        if context.selected < 1 then context.selected = #context.items end
+        local item = context.items[context.selected]
+        -- Skip if it's a header OR if it's disabled AND has no action (labels)
+        local is_label = item.header or (item.disabled and not item.action)
+    until not is_label or context.selected == initial_selected
+    
     render_menu_osd()
 end
 
 handle_menu_down = function()
     if not menu_state.active or #menu_state.stack == 0 then return end
     local context = menu_state.stack[#menu_state.stack]
-    context.selected = context.selected + 1
-    if context.selected > #context.items then context.selected = 1 end
+    local initial_selected = context.selected
+    
+    repeat
+        context.selected = context.selected + 1
+        if context.selected > #context.items then context.selected = 1 end
+        local item = context.items[context.selected]
+        -- Skip if it's a header OR if it's disabled AND has no action (labels)
+        local is_label = item.header or (item.disabled and not item.action)
+    until not is_label or context.selected == initial_selected
+    
     render_menu_osd()
 end
 
