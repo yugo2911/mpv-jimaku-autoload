@@ -14,8 +14,8 @@ local script_opts = {
     JIMAKU_FONT_SIZE     = 16,
     INITIAL_OSD_MESSAGES = true,
     LOG_FILE             = true,
-    USE_ANILIST_API      = true,
-    USE_JIMAKU_API       = true,
+    USE_ANILIST_API      = false,
+    USE_JIMAKU_API       = false,
 }
 -- 2. DETERMINE PATHS
 CONFIG_DIR = STANDALONE_MODE and "." or mp.command_native({"expand-path", "~~/"})
@@ -48,6 +48,8 @@ JIMAKU_ITEMS_PER_PAGE= script_opts.JIMAKU_ITEMS_PER_PAGE
 JIMAKU_MENU_TIMEOUT  = script_opts.JIMAKU_MENU_TIMEOUT
 JIMAKU_FONT_SIZE     = script_opts.JIMAKU_FONT_SIZE
 INITIAL_OSD_MESSAGES = script_opts.INITIAL_OSD_MESSAGES
+USE_ANILIST_API      = script_opts.USE_ANILIST_API
+USE_JIMAKU_API       = script_opts.USE_JIMAKU_API
 -- Configure in what order to subtitiles will get loaded u can disable groups by setting enabled = false
 -- Will be loaded from cache during initialization
 JIMAKU_PREFERRED_GROUPS = nil
@@ -2055,6 +2057,11 @@ end
 -------------------------------------------------------------------------------
 -- Search Jimaku for subtitle entry by AniList ID
 local function search_jimaku_subtitles(anilist_id)
+    -- Check toggle first
+    if not USE_JIMAKU_API then
+        debug_log("Jimaku API disabled by config", false)
+        return nil, "DISABLED"
+    end
     -- O(1) Guard: Prevent misleading "No entries found" if key is missing
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
         debug_log("Jimaku API key not configured - skipping subtitle search", false)
@@ -3478,6 +3485,18 @@ search_anilist = function(is_auto)
     conditional_osd("AniList: Searching for " .. search_title .. "...", 3, is_auto)
     -- Check cache first
     local cache_key = search_title:lower()
+    
+    -- API Toggle Check
+    if not USE_ANILIST_API then
+        debug_log("AniList API disabled by config - Skipping online search")
+        -- Directly try offline search since we can't get AniList ID
+        local offline_success = search_local_subtitle_cache(parsed, is_auto, nil)
+        if not offline_success then
+            conditional_osd("Online search disabled.\nNo local subtitles found.", 3, is_auto)
+        end
+        return
+    end
+
     if not STANDALONE_MODE and ANILIST_CACHE[cache_key] then
         local cache_entry = ANILIST_CACHE[cache_key]
         local cache_age = os.time() - cache_entry.timestamp
