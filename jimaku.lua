@@ -238,7 +238,6 @@ local show_current_match_info_action, reload_subtitles_action
 local download_more_action, clear_subs_action, show_search_results_menu
 local save_config_to_file
 local select_anilist_result, handle_archive_file, apply_browser_filter
-local save_preferred_groups
 -- Close menu and cleanup
 close_menu = function()
     if not menu_state.active then return end
