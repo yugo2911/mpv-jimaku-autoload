@@ -15,7 +15,7 @@ local script_opts = {
     INITIAL_OSD_MESSAGES = true,
     LOG_FILE             = true,
     USE_ANILIST_API      = true,
-    USE_JIMAKU_API       = false
+    USE_JIMAKU_API       = true
 }
 -- 2. DETERMINE PATHS
 CONFIG_DIR = STANDALONE_MODE and "." or mp.command_native({"expand-path", "~~/"})
