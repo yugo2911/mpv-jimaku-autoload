@@ -68,7 +68,7 @@ JIMAKU_CACHE = {}
 
 -- DEBUG LOGGING FUNCTION
 debug_log = function(message, is_error)
-    if script_opts.LOG_ONLY_ERRORS and not is_error then return end
+    if LOG_ONLY_ERRORS and not is_error then return end
     
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local log_msg = string.format("[%s] %s\n", timestamp, message)
@@ -77,10 +77,9 @@ debug_log = function(message, is_error)
     print("Jimaku: " .. message)
 
     -- 2. Handle File I/O safely
-    -- Check if LOG_FILE is a string (not nil/false)
-    local path = script_opts.LOG_FILE
-    if type(path) == "string" then
-        local f = io.open(path, "a")
+    -- FIX: Use global LOG_FILE (string path) instead of script_opts.LOG_FILE (boolean)
+    if type(LOG_FILE) == "string" then
+        local f = io.open(LOG_FILE, "a")
         if f then
             f:write(log_msg)
             f:close()

@@ -1,10 +1,16 @@
-fix config saving via menu
+fix prefered groups
 fix archive files, make sure we read deeper than 1 level
 confidence feedback is not useful dont show it to users
 asyncrous subtitile downloading one the time is retarded
-broke subtitle browser jump to current episode broken again......
 
 at some point loading subs became way slower? on boot
 
 low priority
-- async ui / fetching so we can insta acess ui
+- async ui / fetching so we can insta acess ui even if fetch etc is going on
+
+lets rethink how we do cahcing, what order to load the stuff in and what should be loaded async, make sure we index files deeper than 1 level cuz of archives they are at various levels
+
+do not rename functions make sure syntax is right make sure all works and makes sense
+
+
+brokeb subtitle browser jump to current episode broken again......
