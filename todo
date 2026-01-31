@@ -1,3 +1,10 @@
+
+tier1
+archives are not fully working
+cache
+
+we have to check somewhere to skip exactly same loaded subs
+
 fix prefered groups
 fix archive files, make sure we read deeper than 1 level
 confidence feedback is not useful dont show it to users
@@ -18,4 +25,6 @@ brokeb subtitle browser jump to current episode broken again......
 
 make it read local files even if anilist and jimaku fail
 
-browse all files(view all files) >, browse all files(exact number of sub files on jimaku for the entry)
+browse all files(view all files) >, browse all files(Retrieved 1253 total subtitle files)
+
+
