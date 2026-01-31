@@ -2409,58 +2409,47 @@ end
 
 local function test_parser(input_file)
     local test_file = input_file or TEST_FILE
-    -- Open parser log once to minimize IO overhead during testing
+    
+    -- Setup Log Handle
     if PARSER_LOG_FILE then
         local hf = io.open(PARSER_LOG_FILE, "w")
         if hf then hf:close() end
         LOG_FILE_HANDLE = io.open(PARSER_LOG_FILE, "a")
     end
 
-    debug_log("=== PARSER TEST MODE STARTED ===")
-    debug_log("Reading from: " .. test_file)
-    
     local file = io.open(test_file, "r")
-    if not file then
-        debug_log("Could not find " .. test_file, true)
-        debug_log("Please create the file with torrent filenames (one per line)", true)
-        return
-    end
+    if not file then return end
     
-    local lines = {}
+    local count = 0
+    local failures = 0
+    local start = os.clock()
+
+    -- ITERATION: Process line-by-line directly. 
+    -- Do not store in a table to keep memory usage flat.
     for line in file:lines() do
         if line:match("%S") then
-            table.insert(lines, line)
+            count = count + 1
+            local res = parse_media_title(line)
+            if not res then
+                failures = failures + 1
+                debug_log("FAILED TO PARSE: " .. line)
+            end
+            
+            if count % 10000 == 0 then
+                print(string.format("Parsed %d...", count))
+            end
         end
     end
+    
     file:close()
-    
-    debug_log(string.format("Processing %d entries", #lines))
-    debug_log("")
-    
-    local results = {}
-    local failures = 0
-    
-    for _, filename in ipairs(lines) do
-        local res = parse_media_title(filename)
-        if res then
-            table.insert(results, res)
-        else
-            failures = failures + 1
-        end
-    end
-    
-    debug_log("")
-    debug_log("=== PARSER TEST SUMMARY ===")
-    debug_log(string.format("Total: %d | Success: %d | Failures: %d", #lines, #results, failures), failures > 0)
-    debug_log("Results written to: " .. PARSER_LOG_FILE)
-    
-    -- Close buffered log handle if opened
-    if LOG_FILE_HANDLE then
-        pcall(function() LOG_FILE_HANDLE:close() end)
+    local diff = os.clock() - start
+    debug_log(string.format("Total: %d | Success: %d | Fail: %d | Time: %.2fs", 
+              count, count-failures, failures, diff))
+
+    if LOG_FILE_HANDLE then 
+        LOG_FILE_HANDLE:close()
         LOG_FILE_HANDLE = nil
     end
-
-    return results, failures
 end
 
 -------------------------------------------------------------------------------
