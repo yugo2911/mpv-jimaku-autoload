@@ -14,8 +14,8 @@ local script_opts = {
     JIMAKU_FONT_SIZE     = 16,
     INITIAL_OSD_MESSAGES = true,
     LOG_FILE             = true,
-    USE_ANILIST_API      = false,
-    USE_JIMAKU_API       = false,
+    USE_ANILIST_API      = true,
+    USE_JIMAKU_API       = false
 }
 -- 2. DETERMINE PATHS
 CONFIG_DIR = STANDALONE_MODE and "." or mp.command_native({"expand-path", "~~/"})
@@ -2702,6 +2702,25 @@ local function scan_for_subtitles(dir_path, base_dir, target_title, target_episo
     
     local subtitle_files = {}
     
+    -- Read metadata for CURRENT directory to validate files within it
+    local current_kitsu = read_kitsuinfo(dir_path)
+    
+    -- VALIDATE METADATA: Does this metadata belong to the anime we are looking for?
+    -- This prevents using "BNA" metadata to validate "BNA" files when looking for "Naruto"
+    -- just because we wandered into the "BNA" folder.
+    local dataset_matches_target = false
+    if current_kitsu then
+        if target_anilist_id and current_kitsu.anilist_id then
+             if tonumber(target_anilist_id) == tonumber(current_kitsu.anilist_id) then
+                 dataset_matches_target = true
+             end
+        elseif target_title and current_kitsu.name then
+             -- Fallback title match if no ID provided in arguments or metadata
+             local meta_relevant, _ = is_relevant_subtitle(current_kitsu.name, target_title, nil, nil)
+             if meta_relevant then dataset_matches_target = true end
+        end
+    end
+
     -- 1. Scan Files directly (no need for file_info)
     local files = utils.readdir(dir_path, "files")
     if files then
@@ -2711,6 +2730,25 @@ local function scan_for_subtitles(dir_path, base_dir, target_title, target_episo
                 ext = ext:lower()
                 if ext == "ass" or ext == "srt" or ext == "vtt" or ext == "sub" then
                     local relevant, reason = is_relevant_subtitle(item, target_title, target_episode, target_season)
+                    
+                    -- Fallback: Check metadata keys if primary title failed AND metadata matches target
+                    if not relevant and dataset_matches_target then
+                        if current_kitsu.japanese_name then
+                            local jp_relevant, jp_reason = is_relevant_subtitle(item, current_kitsu.japanese_name, target_episode, target_season)
+                            if jp_relevant then
+                                relevant = true
+                                reason = jp_reason .. " [match via japanese_name]"
+                            end
+                        end
+                        if not relevant and current_kitsu.english_name then
+                            local en_relevant, en_reason = is_relevant_subtitle(item, current_kitsu.english_name, target_episode, target_season)
+                            if en_relevant then
+                                relevant = true
+                                reason = en_reason .. " [match via english_name]"
+                            end
+                        end
+                    end
+
                     if relevant then
                         table.insert(subtitle_files, {
                             path = dir_path .. "/" .. item,
