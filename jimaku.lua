@@ -34,6 +34,11 @@ ANILIST_CACHE_FILE = CONFIG_DIR .. "/cache/anilist-cache.json"
 JIMAKU_CACHE_FILE  = CONFIG_DIR .. "/cache/jimaku-cache.json"
 PREFERRED_GROUPS_FILE = CONFIG_DIR .. "/cache/preferred-groups.json"
 SUBTITLE_CACHE_DIR = script_opts.SUBTITLE_CACHE_DIR
+-- Strip potential quotes from user config (common user error in conf files)
+if SUBTITLE_CACHE_DIR then
+    SUBTITLE_CACHE_DIR = SUBTITLE_CACHE_DIR:gsub('^"', ''):gsub('"$', '')
+    SUBTITLE_CACHE_DIR = SUBTITLE_CACHE_DIR:gsub("^'", ""):gsub("'$", "")
+end
 if not SUBTITLE_CACHE_DIR:match("^/") and not SUBTITLE_CACHE_DIR:match("^%a:") then
     if not STANDALONE_MODE then
         SUBTITLE_CACHE_DIR = CONFIG_DIR .. "/" .. SUBTITLE_CACHE_DIR:gsub("^./", "")
