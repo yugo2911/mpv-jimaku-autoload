@@ -55,7 +55,6 @@ JIMAKU_FONT_SIZE     = script_opts.JIMAKU_FONT_SIZE
 INITIAL_OSD_MESSAGES = script_opts.INITIAL_OSD_MESSAGES
 USE_ANILIST_API      = script_opts.USE_ANILIST_API
 USE_JIMAKU_API       = script_opts.USE_JIMAKU_API
--- Configure in what order to subtitiles will get loaded u can disable groups by setting enabled = false
 -- Will be loaded from cache during initialization
 JIMAKU_PREFERRED_GROUPS = nil
 -- Runtime Caches
@@ -132,6 +131,7 @@ local function load_preferred_groups()
         return cached.groups
     end
     -- Otherwise use defaults
+    -- Configure in what order to subtitiles will get loaded u can skip groups by setting enabled = false
     debug_log("Using default preferred groups")
     return {
         {name = "Nekomoe kissaten", enabled = true},
