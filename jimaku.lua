@@ -3698,12 +3698,12 @@ search_anilist = function(is_auto)
         }
         menu_state.seasons_data = seasons
         menu_state.parsed_data = parsed
-        -- Add warning for low confidence matches
-        if match_confidence == "very-low" then
-            osd_msg = osd_msg .. "\n⚠⚠ VERY LOW CONFIDENCE - Likely WRONG match!"
-        elseif match_confidence == "low" or match_confidence == "uncertain" then
-            osd_msg = osd_msg .. "\n⚠ Low confidence - verify result"
-        end
+        -- Add warning for low confidence matches this stuff is just missleading legacy stuff...
+        -- if match_confidence == "very-low" then
+        --     osd_msg = osd_msg .. "\n⚠⚠ VERY LOW CONFIDENCE - Likely WRONG match!"
+        -- elseif match_confidence == "low" or match_confidence == "uncertain" then
+        --     osd_msg = osd_msg .. "\n⚠ Low confidence - verify result"
+        -- end
         conditional_osd(osd_msg, 5, is_auto)
         -- Try to fetch subtitles from Jimaku using smart matching
         local jimaku_entry = search_jimaku_subtitles(selected.id)
