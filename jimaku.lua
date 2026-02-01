@@ -335,16 +335,20 @@ end
 local function handle_menu_nav(direction)
     if not menu_state.active or #menu_state.stack == 0 then return end
     local context = menu_state.stack[#menu_state.stack]
-    local initial_selected = context.selected
-    repeat
+    local initial = context.selected
+    local limit = #context.items
+    
+    for _ = 1, limit do -- Prevents infinite loop if all items are labels
         context.selected = context.selected + direction
-        if context.selected < 1 then context.selected = #context.items end
-        if context.selected > #context.items then context.selected = 1 end
+        if context.selected < 1 then context.selected = limit end
+        if context.selected > limit then context.selected = 1 end
+        
         local item = context.items[context.selected]
-        -- Skip if it's a header OR if it's disabled AND has no action (labels)
-        local is_label = item.header or (item.disabled and not item.action)
-    until not is_label or context.selected == initial_selected
-    render_menu_osd()
+        if not (item.header or (item.disabled and not item.action)) then
+            render_menu_osd()
+            return
+        end
+    end
 end
 
 handle_menu_up = function() handle_menu_nav(-1) end
