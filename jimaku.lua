@@ -594,7 +594,8 @@ show_main_menu = function()
         {text = "3. Preferences",        action = function() show_preferences_menu() end},
         {text = "4. Manage & Cleanup",   action = function() show_manage_menu() end},
     }
-    local header = "JIMAKU SUBTITLE MANAGER\\N" .. status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
+    -- local header = "JIMAKU SUBTITLE MANAGER\\N" .. status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
+    local header = status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
     push_menu("Main Menu", items, nil, nil, nil, nil, header)
 end
 -- Consolidated Search & Download Menu
