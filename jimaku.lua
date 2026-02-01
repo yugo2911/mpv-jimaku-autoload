@@ -93,6 +93,85 @@ debug_log = function(message, is_error)
         LOG_FILE_HANDLE:flush()
     end
 end
+
+-- ============================================================================
+-- ASYNC/PROMISE UTILITIES (O(1) deferred execution, no blocking)
+-- ============================================================================
+local async_state = {
+    pending_requests = {},  -- Track active HTTP requests
+    request_id_counter = 0,
+    task_queue = {},        -- Deferred tasks for idle time
+    group_set = nil         -- Cached O(1) group lookup (built from JIMAKU_PREFERRED_GROUPS)
+}
+
+-- Promise-like wrapper for non-blocking operations
+local function create_promise(fn, callback)
+    local promise_id = async_state.request_id_counter + 1
+    async_state.request_id_counter = promise_id
+    async_state.pending_requests[promise_id] = true
+    
+    -- Fire in a deferred timeout (gives control back to mpv immediately)
+    mp.add_timeout(0, function()
+        if not async_state.pending_requests[promise_id] then return end  -- Cancelled
+        
+        local success, result = pcall(fn)
+        if async_state.pending_requests[promise_id] then  -- Still relevant?
+            async_state.pending_requests[promise_id] = nil
+            callback(success, result)
+        end
+    end)
+    return promise_id
+end
+
+-- Cancel a pending promise
+local function cancel_promise(promise_id)
+    if promise_id then
+        async_state.pending_requests[promise_id] = nil
+    end
+end
+
+-- Deferred task queue for non-urgent work (runs when idle)
+local function queue_deferred_task(fn, priority_order)
+    table.insert(async_state.task_queue, {
+        fn = fn,
+        priority = priority_order or 999,
+        created = os.time()
+    })
+    -- Sort by priority
+    table.sort(async_state.task_queue, function(a, b)
+        return a.priority < b.priority
+    end)
+end
+
+-- Process one task from queue (call periodically)
+local function process_next_deferred_task()
+    if #async_state.task_queue > 0 then
+        local task = table.remove(async_state.task_queue, 1)
+        local ok, err = pcall(task.fn)
+        if not ok then
+            debug_log("Deferred task error: " .. tostring(err), true)
+        end
+    end
+end
+
+-- Build O(1) group lookup set (for is_group_preferred)
+local function rebuild_group_set()
+    async_state.group_set = {}
+    if JIMAKU_PREFERRED_GROUPS then
+        for _, g in ipairs(JIMAKU_PREFERRED_GROUPS) do
+            if g.enabled then
+                async_state.group_set[g.name:lower()] = true
+            end
+        end
+    end
+end
+
+-- O(1) group lookup (was O(n) linear scan)
+local function is_group_preferred_fast(group_name)
+    if not async_state.group_set then rebuild_group_set() end
+    return async_state.group_set[group_name:lower()] == true
+end
+
 -- Example Cache Utility with Debug Info
 save_persistent_cache = function(file_path, data)
     debug_log("Cache Debug: Attempting to save to " .. file_path)
@@ -122,6 +201,81 @@ load_persistent_cache = function(file_path)
     debug_log("Cache Debug: MISS - No valid cache file found.")
     return {}
 end
+
+-- ============================================================================
+-- ASYNC HTTP REQUEST WRAPPERS (Non-blocking API calls)
+-- ============================================================================
+
+-- Async AniList API request (non-blocking, returns via callback)
+local function make_anilist_request_async(query, variables, callback)
+    local promise_id = create_promise(function()
+        debug_log("ASYNC: AniList Request starting for: " .. (variables.search or "unknown"))
+        local request_body = utils.format_json({query = query, variables = variables})
+        local args = { 
+            "curl", "-s", "-X", "POST", "-m", "5",  -- Add 5s timeout
+            "-H", "Content-Type: application/json", 
+            "-H", "Accept: application/json", 
+            "--data", request_body, 
+            ANILIST_API_URL 
+        }
+        local result = mp.command_native({
+            name = "subprocess", 
+            capture_stdout = true, 
+            playback_only = false, 
+            args = args
+        })
+        if result.status ~= 0 or not result.stdout then 
+            debug_log("ASYNC: Curl request failed or returned no output", true)
+            return nil 
+        end
+        local ok, data = pcall(utils.parse_json, result.stdout)
+        if not ok then
+            debug_log("ASYNC: Failed to parse JSON response", true)
+            return nil
+        end
+        if data.errors then
+            debug_log("ASYNC: AniList API Error: " .. utils.format_json(data.errors), true)
+            return nil
+        end
+        debug_log("ASYNC: AniList Request completed successfully")
+        return data.data
+    end, function(success, result)
+        debug_log(string.format("ASYNC: Callback fired (success=%s)", tostring(success)))
+        callback(success, result)
+    end)
+    return promise_id
+end
+
+-- Async Jimaku API request (non-blocking)
+local function make_jimaku_request_async(path, callback)
+    local promise_id = create_promise(function()
+        debug_log("ASYNC: Jimaku request starting: " .. path)
+        local url = JIMAKU_API_URL .. path
+        local args = { "curl", "-s", "-m", "5", url }  -- 5s timeout
+        local result = mp.command_native({
+            name = "subprocess",
+            capture_stdout = true,
+            playback_only = false,
+            args = args
+        })
+        if result.status ~= 0 or not result.stdout then
+            debug_log("ASYNC: Jimaku request failed", true)
+            return nil
+        end
+        local ok, data = pcall(utils.parse_json, result.stdout)
+        if not ok then
+            debug_log("ASYNC: Failed to parse Jimaku JSON", true)
+            return nil
+        end
+        debug_log("ASYNC: Jimaku request completed")
+        return data
+    end, function(success, result)
+        callback(success, result)
+    end)
+    return promise_id
+end
+
+-- Synchronous version for backwards compatibility (DEPRECATED: use async version instead)
 -- Load preferred groups from cache or use defaults
 local function load_preferred_groups()
     local cached = load_persistent_cache(PREFERRED_GROUPS_FILE)
@@ -247,6 +401,7 @@ local show_current_match_info_action, reload_subtitles_action
 local download_more_action, clear_subs_action, show_search_results_menu
 local save_config_to_file
 local select_anilist_result, handle_archive_file, apply_browser_filter
+
 -- Close menu and cleanup
 close_menu = function()
     if not menu_state.active then return end
@@ -874,20 +1029,55 @@ show_search_results_menu = function()
     local footer = "←/→ Page | [UP/DOWN] Scroll | [ENTER] Select"
     push_menu(title, items, footer, on_left, on_right)
 end
+extract_year = function(filename)
+    if not filename then return nil end
+    
+    -- Pattern: Look for 4 digits starting with 19 or 20 inside [] or ()
+    local year_patterns = {"%b[]", "%b()"}
+    
+    for _, container in ipairs(year_patterns) do
+        local content = filename:match(container)
+        if content then
+            local year = content:match("(%d%d%d%d)")
+            if year then
+                local y = tonumber(year)
+                if y >= 1900 and y <= 2100 then
+                    return y
+                end
+            end
+        end
+    end
+    
+    -- Fallback: Look for naked 4-digit year if no brackets exist
+    local fallback = filename:match("%s(%d%d%d%d)%s") or filename:match("[(%d%d%d%d)]")
+    if fallback then
+        local y = tonumber(fallback)
+        if y >= 1900 and y <= 2100 then return y end
+    end
+
+    return nil
+end
 -- Select a specific AniList result and re-run subtitle matching
 select_anilist_result = function(selected)
-    debug_log("User manually selected AniList result: " .. (selected.title.romaji or selected.id))
-    -- We need to re-calculate episode/season logic for THIS specific entry
-    -- We can reuse smart_match_anilist by passing it as the ONLY result
+    -- Use romaji title for logging, with a fallback O(1)
+    local title_text = selected.title.romaji or selected.title.english or "Unknown"
+    debug_log("User manually selected AniList result: " .. (title_text .. " ID: " .. selected.id))
+    
     local episode_num = tonumber(menu_state.parsed_data.episode) or 1
     local season_num = menu_state.parsed_data.season
-    local file_year = extract_year(mp.get_property("media-title") or mp.get_property("filename"))
+    
+    -- Fix: Call the newly added extract_year and handle nil safely
+    local media_title = mp.get_property("media-title") or mp.get_property("filename")
+    local file_year = extract_year(media_title)
+    
+    -- smart_match_anilist iteration
     local media, actual_episode, actual_season, seasons, match_method, match_confidence = 
         smart_match_anilist({selected}, menu_state.parsed_data, episode_num, season_num, file_year)
+    
     -- Update state
     menu_state.anilist_id = selected.id
     menu_state.current_match = {
-        title = selected.title.romaji,
+        title = title_text,
         anilist_id = selected.id,
         episode = actual_episode,
         season = actual_season,
@@ -897,14 +1087,17 @@ select_anilist_result = function(selected)
         confidence = "certain",
         anilist_entry = selected
     }
+    
     menu_state.seasons_data = seasons
-    mp.osd_message("Selected: " .. selected.title.romaji, 3)
-    -- Now try to fetch subtitles for this new match
+    mp.osd_message("Selected: " .. title_text, 3)
+    
+    -- Trigger subtitle search O(1)
     local jimaku_entry = search_jimaku_subtitles(selected.id)
     if jimaku_entry then
         menu_state.jimaku_id = jimaku_entry.id
         menu_state.jimaku_entry = jimaku_entry
-        menu_state.browser_files = nil -- Clear cache to force refresh
+        menu_state.browser_files = nil -- Reset cache for new ID
+        
         download_subtitle_smart(
             jimaku_entry.id, 
             actual_episode, 
@@ -915,7 +1108,7 @@ select_anilist_result = function(selected)
     else
         mp.osd_message("No Jimaku entry found for this show.", 3)
     end
-    -- Return to main menu or close? Let's return to main menu
+    
     close_menu()
 end
 -- Apply a filter to the subtitle browser
@@ -3446,21 +3639,7 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
     debug_log("Using default match (first search result) - LOW CONFIDENCE")
     return selected, actual_episode, actual_season, seasons, match_method, match_confidence
 end
--- Extract year from filename (for disambiguation)
-local function extract_year(filename)
-    if not filename then return nil end
-    -- Look for (2024), (2025), etc.
-    local year = filename:match("%(20(%d%d)%)")
-    if year then
-        return 2000 + tonumber(year)
-    end
-    -- Look for [2024], [2025]
-    year = filename:match("%[20(%d%d)%]")
-    if year then
-        return 2000 + tonumber(year)
-    end
-    return nil
-end
+
 -- Create a clean version of title for AniList search
 local function get_search_title(parsed)
     local search_title = parsed.title
