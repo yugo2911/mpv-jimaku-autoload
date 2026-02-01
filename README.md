@@ -1,3 +1,23 @@
+**Installation:**
+1. **Place script:** `jimaku.lua` → `~/.config/mpv/scripts/`
+2. **Add API key:** Create `~/.config/mpv/script-opts/jimaku.conf` with:
+```ini
+jimaku_api_key=YOUR_API_KEY_HERE
+SUBTITLE_CACHE_DIR=./subtitle-cache
+JIMAKU_AUTO_DOWNLOAD=yes
+JIMAKU_MAX_SUBS=10
+JIMAKU_ITEMS_PER_PAGE=4
+JIMAKU_MENU_TIMEOUT=15
+JIMAKU_FONT_SIZE=16
+JIMAKU_HIDE_SIGNS=no
+INITIAL_OSD_MESSAGES=yes
+LOG_FILE=no
+```
+**Get API key:** [jimaku.cc](https://jimaku.cc)
+
+* **Windows:** `%APPDATA%\mpv\scripts\`
+* **Linux/macOS:** `~/.config/mpv/scripts/`
+
 ```
 1. FILE LOADS in mpv
    │
