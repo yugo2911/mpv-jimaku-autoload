@@ -13,7 +13,7 @@ local script_opts = {
     JIMAKU_MENU_TIMEOUT  = 30,
     JIMAKU_FONT_SIZE     = 16,
     INITIAL_OSD_MESSAGES = true,
-    LOG_FILE             = true,
+    LOG_FILE             = false,
     USE_ANILIST_API      = true,
     USE_JIMAKU_API       = true
 }
