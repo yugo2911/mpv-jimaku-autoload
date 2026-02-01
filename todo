@@ -26,6 +26,6 @@ make it read local files even if anilist and jimaku fail
 browse all files(view all files) >, browse all files(Retrieved 1253 total subtitle files)
 
 
-makes sense to get local subs first if user has them from kitsunekko
+makes sense to get local subs first if user has them from kitsunekko, if kittsuneko-mirror is used it lags mpv somtimes to ammount of files
 
 
