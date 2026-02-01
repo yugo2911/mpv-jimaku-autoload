@@ -46,4 +46,4 @@ LOG_FILE=no
     │
     └── Browse, search, manage subtitles
 ```
-i mean it works~ but there not all GUI options work for now
+It works~ for gettings subs from jimaku, some GUI options are WIP
