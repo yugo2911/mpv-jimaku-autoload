@@ -560,7 +560,7 @@ download_selected_subtitle_action = function(file)
                 mp.osd_message(string.format("Filter: '%s' (Press / to change)", filter), 3)
             end
         end
-    end -- Fixed: This 'end' was missing
+    end
 end
 -- Forward declarations to prevent nil reference errors
 local show_main_menu, show_download_menu
@@ -605,19 +605,29 @@ end
 -- Consolidated Search & Download Menu
 -- Replaces both show_download_menu and show_search_menu
 show_download_menu = function()
-    -- Cached local lookups for O(1) access during item construction
     local ms = menu_state
+    
+    -- Entry logic: Only exit/pop if this specific menu is already at the top of the stack
+    -- Otherwise, we let it fall through to push the menu
+    if ms.active and ms.stack[#ms.stack] and ms.stack[#ms.stack].title == "Search & Download" then
+        if #ms.stack > 1 then
+            pop_menu()
+        else
+            close_menu()
+        end
+        return
+    end
+
     local m = ms.current_match
-    local results_count = #ms.search_results
     local has_match = ms.jimaku_id ~= nil
-    local match_name = m and m.title or "None"
-    local match_details = m and string.format("ID: %s | Conf: %s", m.anilist_id, m.confidence or "??") or "No active match"
-    local results_hint = results_count > 0 and (results_count .. " found") or "No results"
+    local results_count = #ms.search_results
+    
+    -- Exact mirror of main menu header formatting
+    local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
+                   or "Match: None (press '1' to search)"
+    local header = status .. "\\NSubs: " .. (ms.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
+
     local items = {
-        -- Status Headers (Disabled items for display only)
-        {text = "Current:", hint = match_name, disabled = true},
-        {text = "Details:", hint = match_details, disabled = true},
-        -- Primary Logic Items
         {
             text = "1. Auto-Search & Match", 
             action = function() 
@@ -627,7 +637,7 @@ show_download_menu = function()
         },
         {
             text = "2. Pick from Results", 
-            hint = results_hint, 
+            hint = results_count > 0 and (results_count .. " found") or "No results", 
             disabled = results_count == 0, 
             action = function()
                 ms.search_results_page = 1
@@ -635,11 +645,11 @@ show_download_menu = function()
             end
         },
         {
-            text = "2. Manual AniList Search", 
+            text = "3. Manual AniList Search", 
             action = manual_search_action
         },
         {
-            text = "3. Manual Jimaku Search", 
+            text = "4. Manual Jimaku Search", 
             action = function()
                 mp.osd_message("Type search in console (press ~)", 3)
                 mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
@@ -652,7 +662,7 @@ show_download_menu = function()
         },
         {text = "0. Back to Main Menu", action = pop_menu},
     }
-    local header = "SEARCH & DOWNLOAD\\N" .. string.rep("—", 20)
+
     push_menu("Search & Download", items, nil, nil, nil, nil, header)
 end
 -- Keep old function name for compatibility
