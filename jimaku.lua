@@ -390,20 +390,24 @@ end
 -------------------------------------------------------------------------------
 -- MENU DEFINITIONS & ACTIONS
 -------------------------------------------------------------------------------
+
 -- Action handlers
 reload_subtitles_action = function()
     mp.osd_message("Reloading...", 2)
     pop_menu()
 end
+
 download_more_action = function()
     mp.osd_message("Downloading more...", 2)
     pop_menu()
 end
+
 clear_subs_action = function()
     mp.command("sub-remove")
     mp.osd_message("✓ Subtitles cleared", 2)
     pop_menu()
 end
+
 -- Show detailed match info
 show_current_match_info_action = function()
     local m = menu_state.current_match
@@ -411,6 +415,7 @@ show_current_match_info_action = function()
         mp.osd_message("No match information available", 3)
         return
     end
+    
     local info = string.format(
         "Current Match Info:\\N" ..
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
@@ -429,9 +434,11 @@ show_current_match_info_action = function()
         m.match_method or "N/A",
         m.confidence or "N/A"
     )
+    
     mp.osd_message(info, 8)
     pop_menu()
 end
+
 -- Download a specific subtitle file selected from browser
 download_selected_subtitle_action = function(file)
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
@@ -465,9 +472,13 @@ download_selected_subtitle_action = function(file)
         end
     end
 end
+
 -- Forward declarations to prevent nil reference errors
 local show_main_menu, show_download_menu
--- 1. Main Menu
+
+-------------------------------------------------------------------------------
+-- 1. MAIN MENU
+-------------------------------------------------------------------------------
 
 -- 1. Main Menu (Updated to point to consolidated menu)
 show_main_menu = function()
@@ -480,12 +491,15 @@ show_main_menu = function()
         end
         return
     end
+    
     menu_state.stack = {}
     menu_state.active = false
     local m = menu_state.current_match
     local has_match = menu_state.jimaku_id ~= nil
+    
     local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
                      or "Match: None (press 'A' to search)"
+    
     local items = {
         {
             text = "1. Browse All Available", 
@@ -501,10 +515,16 @@ show_main_menu = function()
         {text = "3. Preferences",        action = function() show_preferences_menu() end},
         {text = "4. Manage & Cleanup",   action = function() show_manage_menu() end},
     }
+    
     -- local header = "JIMAKU SUBTITLE MANAGER\\N" .. status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
     local header = status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
     push_menu("Main Menu", items, nil, nil, nil, nil, header)
 end
+
+-------------------------------------------------------------------------------
+-- 2. CONSOLIDATED SEARCH & DOWNLOAD MENU
+-------------------------------------------------------------------------------
+
 -- Consolidated Search & Download Menu
 -- Replaces both show_download_menu and show_search_menu
 show_download_menu = function()
@@ -568,8 +588,14 @@ show_download_menu = function()
 
     push_menu("Search & Download", items, nil, nil, nil, nil, header)
 end
+
 -- Keep old function name for compatibility
 show_subtitles_menu = show_download_menu
+
+-------------------------------------------------------------------------------
+-- 3. SUBTITLE BROWSER (PAGINATED)
+-------------------------------------------------------------------------------
+
 -- Subtitle Browser (Paginated)
 show_subtitle_browser = function()
     local jimaku_id = menu_state.jimaku_id
@@ -577,6 +603,7 @@ show_subtitle_browser = function()
         mp.osd_message("No Jimaku ID available. Run search first.", 3)
         return
     end
+    
     -- Fetch files if not cached
     if not menu_state.browser_files then
         mp.osd_message("Fetching subtitle list...", 30)
@@ -587,12 +614,15 @@ show_subtitle_browser = function()
         menu_state.browser_files = files
         mp.osd_message("", 0)
     end
+    
     if not menu_state.browser_files or #menu_state.browser_files == 0 then
         mp.osd_message("No subtitles found on Jimaku", 3)
         return
     end
+    
     local all_files = menu_state.browser_files
     local filtered_files = {}
+    
     -- Apply filter if active
     if menu_state.browser_filter then
         local filter = menu_state.browser_filter:lower()
@@ -608,12 +638,14 @@ show_subtitle_browser = function()
     else
         filtered_files = all_files
     end
+    
     -- If page is nil, jump to current episode
     if not menu_state.browser_page or menu_state.browser_page < 1 then
         menu_state.browser_page = 1
         -- Get target episode from current_match
         local target_ep = menu_state.current_match and menu_state.current_match.episode
         local target_season = menu_state.current_match and menu_state.current_match.season
+        
         -- Calculate cumulative episode for matching (like download logic does)
         local target_cumulative = nil
         if target_ep and menu_state.seasons_data then
@@ -629,14 +661,17 @@ show_subtitle_browser = function()
                 target_cumulative = target_ep
             end
         end
+        
         if target_ep then
             for i, file in ipairs(filtered_files) do
                 local s, e = parse_jimaku_filename(file.name)
                 local matched = false
+                
                 -- Match 1: Direct season/episode match
                 if e == target_ep and (not s or not target_season or s == target_season) then
                     matched = true
                 end
+                
                 -- Match 2: Japanese absolute episode (第222話)
                 if not matched and target_cumulative then
                     local japanese_ep = file.name:match("第(%d+)[話回]")
@@ -644,10 +679,12 @@ show_subtitle_browser = function()
                         matched = true
                     end
                 end
+                
                 -- Match 3: Episode number matches cumulative (for files with just E222)
                 if not matched and target_cumulative and e == target_cumulative then
                     matched = true
                 end
+                
                 if matched then
                     menu_state.browser_page = math.ceil(i / menu_state.items_per_page)
                     break
@@ -655,32 +692,41 @@ show_subtitle_browser = function()
             end
         end
     end
+    
     local page = menu_state.browser_page
     local per_page = menu_state.items_per_page
     local total_pages = math.ceil(#filtered_files / per_page)
+    
     -- Ensure page is valid after filtering
     if page > total_pages and total_pages > 0 then page = total_pages end
     if page < 1 then page = 1 end
+    
     local start_idx = (page - 1) * per_page + 1
     local end_idx = math.min(start_idx + per_page - 1, #filtered_files)
+    
     local items = {}
     for i = start_idx, end_idx do
         local file = filtered_files[i]
         local display_idx = i - start_idx + 1
+        
         -- We skip the parse_jimaku_filename part entirely since we don't want S/E
         local is_loaded = false
         for _, loaded_name in ipairs(menu_state.loaded_subs_files) do
             if loaded_name == file.name then is_loaded = true break end
         end
+        
         -- Removed 'display_num' from the format string below
         local item_text = string.format("{\\fs%d}%d. %s", JIMAKU_FONT_SIZE - 2, display_idx, file.name)
         if is_loaded then item_text = "✓ " .. item_text end
+        
         table.insert(items, {
             text = item_text,
             action = function() download_selected_subtitle_action(file) end
         })
     end
+    
     table.insert(items, {text = "0. Back", action = pop_menu})
+    
     -- Pagination callbacks
     local on_left = function()
         if page > 1 then
@@ -689,6 +735,7 @@ show_subtitle_browser = function()
             show_subtitle_browser()
         end
     end
+    
     local on_right = function()
         if page < total_pages then
             menu_state.browser_page = page + 1
@@ -696,23 +743,32 @@ show_subtitle_browser = function()
             show_subtitle_browser()
         end
     end
+    
     -- Footer labels (non-numbered shortcuts)
     local footer = "←/→ Page | [F] Filter | [X] Clear | [UP/DOWN] Select"
     local title_prefix = menu_state.browser_filter and string.format("FILTERED: '%s' ", menu_state.browser_filter) or ""
     local title = string.format("%sBrowse Jimaku Subs (%d/%d) - Total %d", 
         title_prefix, page, total_pages, #filtered_files)
+    
     push_menu(title, items, footer, on_left, on_right)
 end
+
+-------------------------------------------------------------------------------
+-- 4. HELPER FUNCTIONS FOR BROWSER
+-------------------------------------------------------------------------------
+
 -- Helper for sorting browser files logically
 logical_sort_files = function(files)
     table.sort(files, function(a, b)
         local s_a, e_a = parse_jimaku_filename(a.name)
         local s_b, e_b = parse_jimaku_filename(b.name)
+        
         -- 1. Primary: Season
         if s_a ~= s_b then
             if s_a and s_b then return s_a < s_b end
             return s_a ~= nil -- Non-nil seasons come first
         end
+        
         -- 2. Secondary: Episode
         if e_a ~= e_b then
             local num_a, num_b = tonumber(e_a), tonumber(e_b)
@@ -725,10 +781,16 @@ logical_sort_files = function(files)
             end
             return e_a ~= nil -- Non-nil episodes come first
         end
+        
         -- 3. Tertiary: Filename (Lowercase for stability)
         return a.name:lower() < b.name:lower()
     end)
 end
+
+-------------------------------------------------------------------------------
+-- 5. ANILIST RESULTS BROWSER (PAGINATED)
+-------------------------------------------------------------------------------
+
 -- AniList Results Browser (Paginated)
 show_search_results_menu = function()
     local results = menu_state.search_results
@@ -736,11 +798,14 @@ show_search_results_menu = function()
         mp.osd_message("No search results to display.", 3)
         return
     end
+    
     local page = menu_state.search_results_page
     local per_page = menu_state.items_per_page
     local total_pages = math.ceil(#results / per_page)
+    
     local start_idx = (page - 1) * per_page + 1
     local end_idx = math.min(start_idx + per_page - 1, #results)
+    
     local items = {}
     for i = start_idx, end_idx do
         local media = results[i]
@@ -749,6 +814,7 @@ show_search_results_menu = function()
         local format = media.format and (" (" .. media.format .. ")") or ""
         local is_current = (menu_state.current_match and menu_state.current_match.anilist_id == media.id)
         local prefix = is_current and "✓ " or ""
+        
         table.insert(items, {
             text = string.format("%d. %s%s", (i - start_idx + 1), prefix, title),
             hint = format .. year,
@@ -757,7 +823,9 @@ show_search_results_menu = function()
             end
         })
     end
+    
     table.insert(items, {text = "0. Back", action = pop_menu})
+    
     -- Pagination callbacks
     local on_left = function()
         if page > 1 then
@@ -766,6 +834,7 @@ show_search_results_menu = function()
             show_search_results_menu()
         end
     end
+    
     local on_right = function()
         if page < total_pages then
             menu_state.search_results_page = page + 1
@@ -773,10 +842,16 @@ show_search_results_menu = function()
             show_search_results_menu()
         end
     end
+    
     local title = string.format("AniList Results (Page %d/%d)", page, total_pages)
     local footer = "←/→ Page | [UP/DOWN] Scroll | [ENTER] Select"
     push_menu(title, items, footer, on_left, on_right)
 end
+
+-------------------------------------------------------------------------------
+-- 6. ANILIST SELECTION & FILTERING
+-------------------------------------------------------------------------------
+
 extract_year = function(filename)
     if not filename then return nil end
     
@@ -805,6 +880,7 @@ extract_year = function(filename)
 
     return nil
 end
+
 -- Select a specific AniList result and re-run subtitle matching
 select_anilist_result = function(selected)
     -- Use romaji title for logging, with a fallback O(1)
@@ -859,11 +935,13 @@ select_anilist_result = function(selected)
     
     close_menu()
 end
+
 -- Apply a filter to the subtitle browser
 apply_browser_filter = function(filter_text)
     debug_log("Applying browser filter: " .. (filter_text or "NONE"))
     menu_state.browser_filter = filter_text
     menu_state.browser_page = 1 -- Reset to first page of results
+    
     -- Refresh the menu if it's currently showing the browser
     if menu_state.active and #menu_state.stack > 0 and menu_state.stack[#menu_state.stack].title:match("Browse Jimaku Subs") then
         pop_menu()
@@ -872,6 +950,11 @@ apply_browser_filter = function(filter_text)
         render_menu_osd()
     end
 end
+
+-------------------------------------------------------------------------------
+-- 7. PREFERENCES MENU SYSTEM
+-------------------------------------------------------------------------------
+
 -- Preferences Menu (replaces Settings)
 show_preferences_menu = function(selected)
     local items = {
@@ -883,10 +966,12 @@ show_preferences_menu = function(selected)
     }
     push_menu("Preferences", items, nil, nil, nil, selected)
 end
+
 -- Download Settings (consolidates auto-download, max subs, hide signs)
 show_download_settings_menu = function(selected)
     local auto_dl_status = JIMAKU_AUTO_DOWNLOAD and "✓ Enabled" or "✗ Disabled"
     local signs_status = JIMAKU_HIDE_SIGNS_ONLY and "✓ Hidden" or "✗ Shown"
+    
     local items = {
         {text = "1. Auto-download", hint = auto_dl_status, action = function()
             JIMAKU_AUTO_DOWNLOAD = not JIMAKU_AUTO_DOWNLOAD
@@ -907,9 +992,11 @@ show_download_settings_menu = function(selected)
     }
     push_menu("Download Settings", items, nil, nil, nil, selected)
 end
+
 -- UI Settings Submenu (Interface)
 show_ui_settings_menu = function(selected)
     local osd_status = INITIAL_OSD_MESSAGES and "✓ Enabled" or "✗ Disabled"
+    
     local items = {
         {text = "1. Menu Font Size: " .. JIMAKU_FONT_SIZE, action = function()
             if JIMAKU_FONT_SIZE == 12 then JIMAKU_FONT_SIZE = 16
@@ -943,11 +1030,13 @@ show_ui_settings_menu = function(selected)
     }
     push_menu("Interface Settings", items, nil, nil, nil, selected)
 end
+
 show_preferred_groups_menu = function(selected)
     -- Ensure preferred groups are loaded
     if not JIMAKU_PREFERRED_GROUPS then
         JIMAKU_PREFERRED_GROUPS = load_preferred_groups()
     end
+    
     local items = {}
     for i, group in ipairs(JIMAKU_PREFERRED_GROUPS) do
         local status = group.enabled and "✓ " or "✗ "
@@ -956,6 +1045,7 @@ show_preferred_groups_menu = function(selected)
         if not group.enabled then
             text = string.format("{\\c&H808080&}%s{\\c&HFFFFFF&}", text)
         end
+        
         table.insert(items, {
             text = text,
             hint = nil,
@@ -966,11 +1056,14 @@ show_preferred_groups_menu = function(selected)
             end
         })
     end
+    
     table.insert(items, {text = "9. Add New Group", action = function()
         mp.osd_message("Enter groups (comma separated) in console", 3)
         mp.commandv("script-message-to", "console", "type", "script-message jimaku-set-groups ")
     end})
+    
     table.insert(items, {text = "0. Back to Preferences", action = pop_menu})
+    
     local on_left = function()
         local idx = menu_state.stack[#menu_state.stack].selected
         if idx > 1 and idx <= #JIMAKU_PREFERRED_GROUPS then
@@ -981,6 +1074,7 @@ show_preferred_groups_menu = function(selected)
             pop_menu(); show_preferred_groups_menu(idx - 1)
         end
     end
+    
     local on_right = function()
         local idx = menu_state.stack[#menu_state.stack].selected
         if idx >= 1 and idx < #JIMAKU_PREFERRED_GROUPS then
@@ -990,9 +1084,15 @@ show_preferred_groups_menu = function(selected)
             save_preferred_groups()
         end
     end
+    
     local footer = "←/→ Change Priority | ENTER Toggle | Ctrl+DEL Remove | 0 Back"
     push_menu("Release Group Priority", items, footer, on_left, on_right, selected)
 end
+
+-------------------------------------------------------------------------------
+-- 8. MANAGE & CLEANUP MENU
+-------------------------------------------------------------------------------
+
 -- Cache Submenu
 -- Manage & Cleanup Menu (consolidates Cache + subtitle management)
 show_manage_menu = function()
@@ -1001,6 +1101,7 @@ show_manage_menu = function()
     local anilist_count = count_table(ANILIST_CACHE)
     local jimaku_count = count_table(JIMAKU_CACHE)
     local episode_count = count_table(EPISODE_CACHE)
+    
     local items = {
         {text = "SUBTITLE MANAGEMENT", disabled = true},
         {text = "1. Clear Loaded Subs", action = clear_subs_action},
@@ -1045,10 +1146,15 @@ show_manage_menu = function()
     }
     push_menu("Manage & Cleanup", items)
 end
+
 -- Keep old name for compatibility
 show_cache_menu = show_manage_menu
--- Create subtitle cache directory if it doesn't exist
 
+-------------------------------------------------------------------------------
+-- 9. CACHE MANAGEMENT UTILITIES
+-------------------------------------------------------------------------------
+
+-- Create subtitle cache directory if it doesn't exist
 -- Create directory without CMD flash (cross-platform)
 local function ensure_directory(dir_path)
     if STANDALONE_MODE then
@@ -1071,28 +1177,35 @@ local function load_runtime_cache(file_path, name)
         debug_log(string.format("Cache Debug: STANDALONE_MODE - returning empty %s cache", name))
         return {}
     end
+    
     local f = io.open(file_path, "r")
     if not f then
         debug_log(string.format("%s cache file not found - will create on first search", name))
         return {}
     end
+    
     local content = f:read("*all")
     f:close()
+    
     if not content or content == "" then
         debug_log(string.format("%s cache file is empty", name))
         return {}
     end
+    
     local ok, data = pcall(utils.parse_json, content)
     if not ok then
         debug_log(string.format("Failed to parse %s cache file (corrupted JSON)", name), true)
         return {}
     end
+    
     if not data or type(data) ~= "table" then
         debug_log(string.format("%s cache data is not a valid table", name))
         return {}
     end
+    
     local entry_count = count_table_entries(data)
     debug_log(string.format("Loaded %s cache with %d entries (keys)", name, entry_count))
+    
     -- Log some sample cache keys for debugging
     if entry_count > 0 then
         local sample_keys = {}
@@ -1102,6 +1215,7 @@ local function load_runtime_cache(file_path, name)
         end
         debug_log(string.format("Sample cache keys: %s", table.concat(sample_keys, ", ")))
     end
+    
     return data
 end
 
@@ -1111,22 +1225,27 @@ local function save_runtime_cache(file_path, data, name)
         debug_log("Cache Debug: STANDALONE_MODE - skipping save")
         return 
     end
+    
     local entry_count = count_table_entries(data)
     debug_log(string.format("Saving %s cache with %d entries", name, entry_count))
+    
     if entry_count == 0 then
         debug_log(string.format("Warning: Saving empty %s cache", name))
     end
+    
     local f = io.open(file_path, "w")
     if not f then
         debug_log(string.format("Failed to open %s cache file for writing", name), true)
         return
     end
+    
     local ok, json = pcall(utils.format_json, data)
     if not ok then
         debug_log(string.format("Failed to serialize %s cache to JSON", name), true)
         f:close()
         return
     end
+    
     f:write(json)
     f:close()
     debug_log(string.format("Successfully saved %s cache to %s", name, file_path))
@@ -1148,18 +1267,27 @@ end
 local function save_JIMAKU_CACHE()
     save_runtime_cache(JIMAKU_CACHE_FILE, JIMAKU_CACHE, "Jimaku")
 end
+
+-------------------------------------------------------------------------------
+-- 10. CONFIGURATION SAVING
+-------------------------------------------------------------------------------
+
 save_config_to_file = function()
     debug_log("========== SAVE CONFIG DEBUG START ==========")
+    
     -- Check standalone mode
     if STANDALONE_MODE then 
         debug_log("ERROR: Cannot save config in standalone mode", true)
         mp.osd_message("✗ Cannot save in standalone mode", 3)
         return 
     end
+    
     debug_log("✓ Not in standalone mode")
+    
     -- Debug CONFIG_DIR
     debug_log("CONFIG_DIR = " .. tostring(CONFIG_DIR))
     debug_log("CONFIG_DIR type = " .. type(CONFIG_DIR))
+    
     -- Helper function to mask sensitive data in logs
     local function mask_api_key(key)
         if not key or key == "" or #key < 8 then
@@ -1167,10 +1295,12 @@ save_config_to_file = function()
         end
         return key:sub(1, 4) .. "..." .. key:sub(-4)
     end
+    
     -- Update script_opts with current values
     -- IMPORTANT: For SUBTITLE_CACHE_DIR, preserve the original relative path format
     -- by NOT overwriting script_opts.SUBTITLE_CACHE_DIR (it already has the user's preferred format)
     debug_log("Updating script_opts with current runtime values...")
+    
     script_opts.jimaku_api_key = JIMAKU_API_KEY or ""
     script_opts.JIMAKU_AUTO_DOWNLOAD = JIMAKU_AUTO_DOWNLOAD
     script_opts.JIMAKU_FONT_SIZE = JIMAKU_FONT_SIZE
@@ -1180,19 +1310,23 @@ save_config_to_file = function()
     script_opts.LOG_ONLY_ERRORS = LOG_ONLY_ERRORS
     script_opts.JIMAKU_MAX_SUBS = JIMAKU_MAX_SUBS
     script_opts.JIMAKU_HIDE_SIGNS = JIMAKU_HIDE_SIGNS_ONLY
+    
     -- DON'T overwrite SUBTITLE_CACHE_DIR - keep original user format (relative vs absolute)
     script_opts.LOG_FILE = LOG_FILE and true or false
+    
     -- Log current values (with API key masked)
     debug_log("Current settings to save:")
     for k, v in pairs(script_opts) do
         local display_value = (k == "jimaku_api_key") and mask_api_key(tostring(v)) or tostring(v)
         debug_log(string.format("  %s = %s (%s)", k, display_value, type(v)))
     end
+    
     -- Construct paths
     local script_opts_dir = CONFIG_DIR .. "/script-opts"
     local config_path = script_opts_dir .. "/jimaku.conf"
     debug_log("script_opts_dir = " .. script_opts_dir)
     debug_log("config_path = " .. config_path)
+    
     -- Check if directory exists
     debug_log("Checking if script-opts directory exists...")
     local dir_check = io.open(script_opts_dir, "r")
@@ -1202,10 +1336,12 @@ save_config_to_file = function()
     else
         debug_log("✗ Directory does not exist, attempting to create...")
     end
+    
     -- Try to create directory
     debug_log("Creating directory: " .. script_opts_dir)
     ensure_directory(script_opts_dir)
     debug_log("Directory creation command executed")
+    
     -- Verify directory creation
     local dir_verify = io.open(script_opts_dir, "r")
     if dir_verify then
@@ -1214,6 +1350,7 @@ save_config_to_file = function()
     else
         debug_log("✗ Directory still doesn't exist after mkdir!", true)
     end
+    
     -- Try opening file for writing
     debug_log("Attempting to open file for writing: " .. config_path)
     local f, err = io.open(config_path, "w")
@@ -1221,6 +1358,7 @@ save_config_to_file = function()
         local error_msg = "Failed to open config file: " .. (err or "unknown error")
         debug_log("✗ " .. error_msg, true)
         debug_log("Attempting to get more error details...")
+        
         -- Try to get file info
         local test_read = io.open(config_path, "r")
         if test_read then
@@ -1229,6 +1367,7 @@ save_config_to_file = function()
         else
             debug_log("  - File does not exist or is not readable")
         end
+        
         -- Check parent directory permissions
         local parent_test = io.open(CONFIG_DIR .. "/test_write.tmp", "w")
         if parent_test then
@@ -1238,11 +1377,14 @@ save_config_to_file = function()
         else
             debug_log("  - Parent directory NOT writable!", true)
         end
+        
         mp.osd_message("✗ Failed to create config file\n" .. (err or ""), 5)
         debug_log("========== SAVE CONFIG DEBUG END (FAILED) ==========")
         return
     end
+    
     debug_log("✓ File opened successfully, writing config...")
+    
     -- Write configuration with detailed logging
     local write_count = 0
     local keys_order = {
@@ -1258,6 +1400,7 @@ save_config_to_file = function()
         "INITIAL_OSD_MESSAGES",
         "LOG_FILE"
     }
+    
     for _, key in ipairs(keys_order) do
         local value = script_opts[key]
         if value ~= nil then
@@ -1269,6 +1412,7 @@ save_config_to_file = function()
             elseif type(value) == "number" then
                 line = key .. "=" .. tostring(value)
             end
+            
             if line ~= "" then
                 local success, write_err = pcall(function() f:write(line .. "\n") end)
                 if success then
@@ -1282,6 +1426,7 @@ save_config_to_file = function()
             end
         end
     end
+    
     -- Close file
     local close_success, close_err = pcall(function() f:close() end)
     if close_success then
@@ -1289,6 +1434,7 @@ save_config_to_file = function()
     else
         debug_log("✗ Error closing file: " .. tostring(close_err), true)
     end
+    
     -- Verify file was written
     debug_log("Verifying written file...")
     local verify = io.open(config_path, "r")
@@ -1299,6 +1445,7 @@ save_config_to_file = function()
         debug_log("File size: " .. #content .. " bytes")
         debug_log("Lines written: " .. write_count)
         debug_log("File content preview (API key masked):")
+        
         for line in content:gmatch("[^\r\n]+") do
             if line:match("^jimaku_api_key=") then
                 local key_val = line:match("^jimaku_api_key=(.*)$")
@@ -1310,6 +1457,7 @@ save_config_to_file = function()
     else
         debug_log("✗ File verification FAILED - file not readable after write!", true)
     end
+    
     mp.osd_message("✓ Settings saved to jimaku.conf\n(" .. write_count .. " settings)", 3)
     debug_log("Configuration saved to " .. config_path)
     debug_log("========== SAVE CONFIG DEBUG END (SUCCESS) ==========")
