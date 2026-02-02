@@ -1188,102 +1188,100 @@ local function ensure_directory(dir_path)
 end
 
 -- Generic runtime cache loader with logging
-local function load_runtime_cache(file_path, name)
-    if STANDALONE_MODE then 
-        debug_log(string.format("Cache Debug: STANDALONE_MODE - returning empty %s cache", name))
-        return {}
+local function manage_runtime_cache(file_path, operation, data, cache_name)
+    -- Ensure cache directory exists
+    local dir = file_path:match("^(.*)[/\\]")
+    if dir and not utils.readdir(dir, "dirs") then
+        ensure_directory(dir)
     end
     
-    local f = io.open(file_path, "r")
-    if not f then
-        debug_log(string.format("%s cache file not found - will create on first search", name))
-        return {}
-    end
-    
-    local content = f:read("*all")
-    f:close()
-    
-    if not content or content == "" then
-        debug_log(string.format("%s cache file is empty", name))
-        return {}
-    end
-    
-    local ok, data = pcall(utils.parse_json, content)
-    if not ok then
-        debug_log(string.format("Failed to parse %s cache file (corrupted JSON)", name), true)
-        return {}
-    end
-    
-    if not data or type(data) ~= "table" then
-        debug_log(string.format("%s cache data is not a valid table", name))
-        return {}
-    end
-    
-    local entry_count = count_table_entries(data)
-    debug_log(string.format("Loaded %s cache with %d entries (keys)", name, entry_count))
-    
-    -- Log some sample cache keys for debugging
-    if entry_count > 0 then
-        local sample_keys = {}
-        for key, _ in pairs(data) do
-            table.insert(sample_keys, key)
-            if #sample_keys >= 3 then break end
+    if operation == "load" then
+        debug_log("Cache Debug: Checking for cache at " .. file_path)
+        local f = io.open(file_path, "r")
+        if not f then
+            debug_log("Cache Debug: MISS - No cache file found.")
+            return {}
         end
-        debug_log(string.format("Sample cache keys: %s", table.concat(sample_keys, ", ")))
-    end
-    
-    return data
-end
-
--- Generic runtime cache saver with logging
-local function save_runtime_cache(file_path, data, name)
-    if STANDALONE_MODE then 
-        debug_log("Cache Debug: STANDALONE_MODE - skipping save")
-        return 
-    end
-    
-    local entry_count = count_table_entries(data)
-    debug_log(string.format("Saving %s cache with %d entries", name, entry_count))
-    
-    if entry_count == 0 then
-        debug_log(string.format("Warning: Saving empty %s cache", name))
-    end
-    
-    local f = io.open(file_path, "w")
-    if not f then
-        debug_log(string.format("Failed to open %s cache file for writing", name), true)
-        return
-    end
-    
-    local ok, json = pcall(utils.format_json, data)
-    if not ok then
-        debug_log(string.format("Failed to serialize %s cache to JSON", name), true)
+        
+        local content = f:read("*all")
         f:close()
-        return
+        if not content or content == "" then
+            debug_log("Cache Debug: EMPTY - Cache file exists but is empty.")
+            return {}
+        end
+        
+        local ok, loaded_data = pcall(utils.parse_json, content)
+        if not ok then
+            debug_log("Cache Debug: CORRUPT - Failed to parse cache JSON.", true)
+            return {}
+        end
+        
+        if not loaded_data or type(loaded_data) ~= "table" then
+            debug_log("Cache Debug: INVALID - Cache data is not a valid table.")
+            return {}
+        end
+        
+        local entry_count = count_table_entries(loaded_data)
+        debug_log(string.format("Cache Debug: HIT - Loaded %s cache with %d entries", 
+                  cache_name or "runtime", entry_count))
+        
+        if entry_count > 0 then
+            local sample_keys = {}
+            for key, _ in pairs(loaded_data) do
+                table.insert(sample_keys, key)
+                if #sample_keys >= 3 then break end
+            end
+            debug_log(string.format("Sample cache keys: %s", table.concat(sample_keys, ", ")))
+        end
+        
+        return loaded_data
+        
+    elseif operation == "save" then
+        if not data then
+            debug_log("Cache Debug: No data to save", true)
+            return false
+        end
+        
+        local entry_count = count_table_entries(data)
+        debug_log(string.format("Cache Debug: Saving %s cache with %d entries", 
+                  cache_name or "runtime", entry_count))
+        
+        if entry_count == 0 then
+            debug_log("Cache Debug: WARNING - Saving empty cache")
+        end
+        
+        local f, err = io.open(file_path, "w")
+        if not f then
+            debug_log(string.format("Cache Debug: ERROR - Cannot open file: %s", err or "unknown"), true)
+            return false
+        end
+        
+        local ok, json = pcall(utils.format_json, data)
+        if not ok then
+            debug_log("Cache Debug: ERROR - Failed to serialize to JSON", true)
+            f:close()
+            return false
+        end
+        
+        f:write(json)
+        f:close()
+        debug_log(string.format("Cache Debug: SUCCESS - Saved %d bytes to %s", 
+                  #json, file_path))
+        return true
+        
+    else
+        debug_log("Cache Debug: ERROR - Invalid operation: " .. tostring(operation), true)
+        return nil
     end
-    
-    f:write(json)
-    f:close()
-    debug_log(string.format("Successfully saved %s cache to %s", name, file_path))
 end
 
--- Wrappers for specific caches
 local function load_ANILIST_CACHE()
-    ANILIST_CACHE = load_runtime_cache(ANILIST_CACHE_FILE, "AniList")
-end
-
-local function load_JIMAKU_CACHE()
-    JIMAKU_CACHE = load_runtime_cache(JIMAKU_CACHE_FILE, "Jimaku")
+    ANILIST_CACHE = manage_runtime_cache(ANILIST_CACHE_FILE, "load", nil, "AniList")
 end
 
 local function save_ANILIST_CACHE()
-    save_runtime_cache(ANILIST_CACHE_FILE, ANILIST_CACHE, "AniList")
+    return manage_runtime_cache(ANILIST_CACHE_FILE, "save", ANILIST_CACHE, "AniList")
 end
-
-local function save_JIMAKU_CACHE()
-    save_runtime_cache(JIMAKU_CACHE_FILE, JIMAKU_CACHE, "Jimaku")
-end
-
 -------------------------------------------------------------------------------
 -- 10. CONFIGURATION SAVING
 -------------------------------------------------------------------------------
