@@ -315,255 +315,77 @@ local menu_state = {
 -- Menu configuration
 local MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT
 -------------------------------------------------------------------------------
--- MENU RENDERING & NAVIGATION
+-- MENU RENDERING & NAVIGATION (MINIFIED)
 -------------------------------------------------------------------------------
--- Forward declare local functions for correct scoping
-local render_menu_osd, close_menu, push_menu, pop_menu
-local bind_menu_keys, handle_menu_up, handle_menu_down, handle_menu_left, handle_menu_right, handle_menu_select, handle_menu_num
-local search_anilist, is_archive_file
-local show_main_menu, show_subtitles_menu, show_search_menu, show_download_menu
-local show_info_menu, show_settings_menu, show_cache_menu, show_help_menu, show_manage_menu
-local show_ui_settings_menu, show_filter_settings_menu, show_preferred_groups_menu
-local show_preferences_menu, show_download_settings_menu
-local show_subtitle_browser, fetch_all_episode_files, logical_sort_files
-local parse_jimaku_filename, download_selected_subtitle_action
-local show_current_match_info_action, reload_subtitles_action
-local download_more_action, clear_subs_action, show_search_results_menu
-local save_config_to_file
-local select_anilist_result, handle_archive_file, apply_browser_filter
+local render_menu_osd, close_menu, push_menu, pop_menu, bind_menu_keys
+local handle_menu_up, handle_menu_down, handle_menu_left, handle_menu_right, handle_menu_select, handle_menu_num
 
--- Close menu and cleanup
 close_menu = function()
     if not menu_state.active then return end
-    menu_state.active = false
-    menu_state.stack = {}
-    -- Clear timeout timer
-    if menu_state.timeout_timer then
-        menu_state.timeout_timer:kill()
-        menu_state.timeout_timer = nil
-    end
-    -- Remove all menu keybindings (primary and alternatives)
-    local keys_to_remove = {
-        "menu-up", "menu-down", "menu-left", "menu-right", "menu-select", "menu-close",
-        "menu-up-alt", "menu-down-alt", "menu-select-alt", "menu-back-alt", "menu-quit-alt",
-        "menu-wheel-up", "menu-wheel-down", "menu-mbtn-left", "menu-mbtn-right",
-        "menu-search-slash", "menu-filter-f", "menu-clear-x", "menu-delete-ctrl-del"
-    }
-    for _, name in ipairs(keys_to_remove) do
-        mp.remove_key_binding(name)
-    end
-    for i = 0, 9 do
-        mp.remove_key_binding("menu-num-" .. i)
-    end
-    -- Clear OSD
+    menu_state.active, menu_state.stack = false, {}
+    if menu_state.timeout_timer then menu_state.timeout_timer:kill(); menu_state.timeout_timer = nil end
+    local keys = {"up","down","left","right","select","close","up-alt","down-alt","select-alt","back-alt","quit-alt","wheel-up","wheel-down","mbtn-left","mbtn-right","search-slash","filter-f","clear-x","delete-ctrl-del","filter-reset"}
+    for _, k in ipairs(keys) do mp.remove_key_binding("menu-"..k) end
+    for i = 0, 9 do mp.remove_key_binding("menu-num-"..i) end
     mp.osd_message("", 0)
-    debug_log("Menu closed")
 end
--- Render menu using ASS (Advanced SubStation) styling
+
 render_menu_osd = function()
-    if not menu_state.active or #menu_state.stack == 0 then return end
-    local context = menu_state.stack[#menu_state.stack]
-    local title = context.title
-    local items = context.items
-    local selected = context.selected
-    local footer = context.footer or (#menu_state.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close")
-    local header = context.header
-    local ass = mp.get_property_osd("osd-ass-cc/0")
-    -- Styling
-    local style_header = string.format("{\\b1\\fs%d\\c&H00FFFF&}", JIMAKU_FONT_SIZE + 4)
-    local style_selected = string.format("{\\b1\\fs%d\\c&H00FF00&}", JIMAKU_FONT_SIZE)
-    local style_normal = string.format("{\\fs%d\\c&HFFFFFF&}", JIMAKU_FONT_SIZE)
-    local style_disabled = string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE)
-    local style_footer = string.format("{\\fs%d\\c&HCCCCCC&}", JIMAKU_FONT_SIZE - 2)
-    local style_dim = string.format("{\\fs%d\\c&H888888&}", JIMAKU_FONT_SIZE - 6)
-    local style_status = string.format("{\\fs%d\\c&HAAAAAA&}", JIMAKU_FONT_SIZE - 2)
-    -- Build menu
-    ass = ass .. style_header .. title .. "\\N"
-    ass = ass .. string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE - 2) .. string.rep("━", 40) .. "\\N"
-    -- Add header section if provided
-    if header then
-        ass = ass .. style_status .. header .. "\\N"
-        ass = ass .. string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE - 2) .. string.rep("─", 40) .. "\\N"
+    local ctx = menu_state.stack[#menu_state.stack]
+    if not menu_state.active or not ctx then return end
+    local fs, c = function(s) return "{\\fs"..(JIMAKU_FONT_SIZE+s).."}" end, function(h) return "{\\c&H"..h.."&}" end
+    local style = { h=fs(4)..c("00FFFF").."{\\b1}", s=fs(0)..c("00FF00").."{\\b1}", n=fs(0)..c("FFFFFF"), d=fs(0)..c("808080"), f=fs(-2)..c("CCCCCC"), dim=fs(-6)..c("888888"), st=fs(-2)..c("AAAAAA"), sep=fs(-2)..c("808080") }
+    
+    local ass = mp.get_property_osd("osd-ass-cc/0")..style.h..ctx.title.."\\N"..style.sep..string.rep("━", 40).."\\N"
+    if ctx.header then ass = ass..style.st..ctx.header.."\\N"..style.sep..string.rep("─", 40).."\\N" end
+    for i, it in ipairs(ctx.items) do
+        local is_s = (i == ctx.selected)
+        local st = is_s and style.s or (it.disabled and style.d or style.n)
+        ass = ass..st..(is_s and "→ " or "  ")..it.text..(it.hint and " "..style.dim.."("..it.hint..")"..st or "").."\\N"
     end
-    -- Items
-    for i, item in ipairs(items) do
-        local prefix = (i == selected) and "→ " or "  "
-        local style = (i == selected) and style_selected or style_normal
-        if item.disabled then
-            style = style_disabled
-        end
-        local text = item.text
-        if item.hint then
-            text = text .. " " .. style_dim .. "(" .. item.hint .. ")" .. style
-        end
-        ass = ass .. style .. prefix .. text .. "\\N"
-    end
-    -- Footer
-    ass = ass .. string.format("{\\fs%d\\c&H808080&}", JIMAKU_FONT_SIZE - 2) .. string.rep("━", 40) .. "\\N"
-    ass = ass .. style_footer .. footer .. "\\N"
+    ass = ass..style.sep..string.rep("━", 40).."\\N"..style.f..(ctx.footer or (#menu_state.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close"))
+    
     mp.osd_message(ass, MENU_TIMEOUT)
-    -- Reset timeout
-    if menu_state.timeout_timer then
-        menu_state.timeout_timer:kill()
-    end
+    if menu_state.timeout_timer then menu_state.timeout_timer:kill() end
     menu_state.timeout_timer = mp.add_timeout(MENU_TIMEOUT, close_menu)
 end
--- Helper for conditional OSD messages (suppress during auto-fetch if configured)
-local function conditional_osd(message, duration, is_auto)
-    if not is_auto or INITIAL_OSD_MESSAGES then
-        mp.osd_message(message, duration)
-    end
-end
--- Navigation functions
--- Key handlers
--- Generic navigation handler
-local function handle_menu_nav(direction)
-    if not menu_state.active or #menu_state.stack == 0 then return end
-    local context = menu_state.stack[#menu_state.stack]
-    local initial_selected = context.selected
+
+local function conditional_osd(m, d, a) if m and (not a or INITIAL_OSD_MESSAGES) then mp.osd_message(m, d) end end
+
+local function handle_menu_nav(dir)
+    local ctx = menu_state.stack[#menu_state.stack]
+    if not ctx then return end
+    local init = ctx.selected
     repeat
-        context.selected = context.selected + direction
-        if context.selected < 1 then context.selected = #context.items end
-        if context.selected > #context.items then context.selected = 1 end
-        local item = context.items[context.selected]
-        -- Skip if it's a header OR if it's disabled AND has no action (labels)
-        local is_label = item.header or (item.disabled and not item.action)
-    until not is_label or context.selected == initial_selected
+        ctx.selected = (ctx.selected + dir - 1) % #ctx.items + 1
+        local it = ctx.items[ctx.selected]
+    until not (it.header or (it.disabled and not it.action)) or ctx.selected == init
     render_menu_osd()
 end
 
-handle_menu_up = function() handle_menu_nav(-1) end
-handle_menu_down = function() handle_menu_nav(1) end
-handle_menu_left = function()
-    if not menu_state.active or #menu_state.stack == 0 then return end
-    local context = menu_state.stack[#menu_state.stack]
-    if context.on_left then
-        context.on_left()
-    end
+handle_menu_up, handle_menu_down = function() handle_menu_nav(-1) end, function() handle_menu_nav(1) end
+handle_menu_left = function() local c = menu_state.stack[#menu_state.stack] if c.on_left then c.on_left() end end
+handle_menu_right = function() local c = menu_state.stack[#menu_state.stack] if c.on_right then c.on_right() end end
+handle_menu_select = function() local c = menu_state.stack[#menu_state.stack] local it = c.items[c.selected] if it.action and not it.disabled then it.action() end end
+handle_menu_num = function(n) if n == 0 then pop_menu() else local c = menu_state.stack[#menu_state.stack] local it = c.items[n] if it and it.action and not it.disabled then it.action() end end end
+
+push_menu = function(t, i, f, l, r, s, h)
+    if #menu_state.stack == 0 then bind_menu_keys() end
+    table.insert(menu_state.stack, {title=t, items=i, footer=f, on_left=l, on_right=r, selected=s or 1, header=h})
+    menu_state.active = true; render_menu_osd()
 end
-handle_menu_right = function()
-    if not menu_state.active or #menu_state.stack == 0 then return end
-    local context = menu_state.stack[#menu_state.stack]
-    if context.on_right then
-        context.on_right()
-    end
-end
-handle_menu_select = function()
-    if not menu_state.active or #menu_state.stack == 0 then return end
-    local context = menu_state.stack[#menu_state.stack]
-    local item = context.items[context.selected]
-    if item and item.action and not item.disabled then
-        item.action()
-    end
-end
-handle_menu_num = function(n)
-    if not menu_state.active or #menu_state.stack == 0 then return end
-    local context = menu_state.stack[#menu_state.stack]
-    -- Handle 0 for back/close
-    if n == 0 then
-        pop_menu()
-        return
-    end
-    local item = context.items[n]
-    if item and item.action and not item.disabled then
-        item.action()
-    end
-end
--- Navigation functions
-push_menu = function(title, items, footer, on_left, on_right, selected, header)
-    debug_log("Pushing menu: " .. title)
-    if #menu_state.stack == 0 then
-        bind_menu_keys()
-    end
-    table.insert(menu_state.stack, {
-        title = title,
-        items = items,
-        selected = selected or 1,
-        footer = footer,
-        on_left = on_left,
-        on_right = on_right,
-        header = header
-    })
-    menu_state.active = true
-    render_menu_osd()
-end
-pop_menu = function()
-    debug_log("Popping menu")
-    if #menu_state.stack > 1 then
-        table.remove(menu_state.stack)
-        render_menu_osd()
-    else
-        close_menu()
-    end
-end
+
+pop_menu = function() if #menu_state.stack > 1 then table.remove(menu_state.stack); render_menu_osd() else close_menu() end end
+
 bind_menu_keys = function()
-    -- Primary keys
-    mp.add_forced_key_binding("UP", "menu-up", handle_menu_up)
-    mp.add_forced_key_binding("DOWN", "menu-down", handle_menu_down)
-    mp.add_forced_key_binding("LEFT", "menu-left", handle_menu_left)
-    mp.add_forced_key_binding("RIGHT", "menu-right", handle_menu_right)
-    mp.add_forced_key_binding("ENTER", "menu-select", handle_menu_select)
-    mp.add_forced_key_binding("ESC", "menu-close", pop_menu)
-
-    -- Alternative keys (no overlap)
-    mp.add_forced_key_binding("k", "menu-up-alt", handle_menu_up)
-    mp.add_forced_key_binding("j", "menu-down-alt", handle_menu_down)
-    mp.add_forced_key_binding("l", "menu-select-alt", handle_menu_select)
-    mp.add_forced_key_binding("h", "menu-back-alt", pop_menu)
-    mp.add_forced_key_binding("q", "menu-quit-alt", close_menu)
-
-    -- Global actions
-    local function trigger_filter()
-        local current = menu_state.stack[#menu_state.stack]
-        if menu_state.active and current and current.title:match("Browse Jimaku Subs") then
-            mp.osd_message("Enter filter/episode in console", 3)
-            mp.commandv("script-message-to", "console", "type", "script-message jimaku-browser-filter ")
-        end
-    end
-
-    mp.add_forced_key_binding("/", "menu-search-slash", trigger_filter)
-    mp.add_forced_key_binding("f", "menu-filter-f", trigger_filter)
-
-    -- Fixed: Wrapped the floating logic into a proper binding (assuming 'BACKSPACE' to reset filter)
-    mp.add_forced_key_binding("BS", "menu-filter-reset", function()
-        local current = menu_state.stack[#menu_state.stack]
-        if menu_state.active and current and current.title:match("Browse Jimaku Subs") then
-            apply_browser_filter(nil)
-        end
-    end)
-
-    -- Remove release group
-    mp.add_forced_key_binding("Ctrl+DEL", "menu-delete-ctrl-del", function()
-        local current = menu_state.stack[#menu_state.stack]
-        if menu_state.active and current and current.title == "Release Group Priority" then
-            local idx = current.selected
-            if idx > 0 and idx <= #JIMAKU_PREFERRED_GROUPS then
-                local group_name = JIMAKU_PREFERRED_GROUPS[idx].name
-                table.remove(JIMAKU_PREFERRED_GROUPS, idx)
-                save_preferred_groups()
-                mp.osd_message("Removed: " .. group_name, 2)
-                
-                pop_menu()
-                
-                local new_idx = idx
-                local count = #JIMAKU_PREFERRED_GROUPS
-                if new_idx > count then new_idx = count end
-                if new_idx < 1 then new_idx = 1 end
-                
-                show_preferred_groups_menu(new_idx)
-            end
-        end
-    end)
-
-    -- Mouse bindings
-    mp.add_forced_key_binding("WHEEL_UP", "menu-wheel-up", handle_menu_up)
-    mp.add_forced_key_binding("WHEEL_DOWN", "menu-wheel-down", handle_menu_down)
-    mp.add_forced_key_binding("MBTN_LEFT", "menu-mbtn-left", handle_menu_select)
-    mp.add_forced_key_binding("MBTN_RIGHT", "menu-mbtn-right", pop_menu)
-
-    for i = 0, 9 do
-        mp.add_forced_key_binding(tostring(i), "menu-num-" .. i, function() handle_menu_num(i) end)
-    end
+    local b = {{"UP","up",handle_menu_up},{"DOWN","down",handle_menu_down},{"LEFT","left",handle_menu_left},{"RIGHT","right",handle_menu_right},{"ENTER","select",handle_menu_select},{"ESC","close",pop_menu},{"k","up-alt",handle_menu_up},{"j","down-alt",handle_menu_down},{"l","select-alt",handle_menu_select},{"h","back-alt",pop_menu},{"q","quit-alt",close_menu},{"WHEEL_UP","wheel-up",handle_menu_up},{"WHEEL_DOWN","wheel-down",handle_menu_down},{"MBTN_LEFT","mbtn-left",handle_menu_select},{"MBTN_RIGHT","mbtn-right",pop_menu}}
+    for _, x in ipairs(b) do mp.add_forced_key_binding(x[1], "menu-"..x[2], x[3]) end
+    for i = 0, 9 do mp.add_forced_key_binding(tostring(i), "menu-num-"..i, function() handle_menu_num(i) end) end
+    local function trig() local c = menu_state.stack[#menu_state.stack] if menu_state.active and c.title:match("Jimaku") then mp.commandv("script-message-to","console","type","script-message jimaku-browser-filter ") end end
+    mp.add_forced_key_binding("/", "menu-search-slash", trig)
+    mp.add_forced_key_binding("f", "menu-filter-f", trig)
+    mp.add_forced_key_binding("BS", "menu-filter-reset", function() if menu_state.active and menu_state.stack[#menu_state.stack].title:match("Jimaku") then apply_browser_filter(nil) end end)
+    mp.add_forced_key_binding("Ctrl+DEL", "menu-delete-ctrl-del", function() local c = menu_state.stack[#menu_state.stack] if menu_state.active and c.title == "Release Group Priority" and c.selected <= #JIMAKU_PREFERRED_GROUPS then table.remove(JIMAKU_PREFERRED_GROUPS, c.selected); save_preferred_groups(); pop_menu(); show_preferred_groups_menu(math.max(1, math.min(c.selected, #JIMAKU_PREFERRED_GROUPS))) end end)
 end
 -------------------------------------------------------------------------------
 -- MENU DEFINITIONS & ACTIONS
