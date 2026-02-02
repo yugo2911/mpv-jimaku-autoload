@@ -94,186 +94,112 @@ debug_log = function(message, is_error)
     end
 end
 
--- ============================================================================
--- ASYNC/PROMISE UTILITIES (O(1) deferred execution, no blocking)
--- ============================================================================
-local async_state = {
-    pending_requests = {},  -- Track active HTTP requests
-    request_id_counter = 0,
-    task_queue = {},        -- Deferred tasks for idle time
-    group_set = nil         -- Cached O(1) group lookup (built from JIMAKU_PREFERRED_GROUPS)
-}
+-- ASYNC / HTTP utilities (consolidated, single block)
+local async_state = { pending_requests = {}, request_id_counter = 0, task_queue = {}, group_set = nil }
 
--- Promise-like wrapper for non-blocking operations
 local function create_promise(fn, callback)
-    local promise_id = async_state.request_id_counter + 1
-    async_state.request_id_counter = promise_id
-    async_state.pending_requests[promise_id] = true
-    
-    -- Fire in a deferred timeout (gives control back to mpv immediately)
+    local id = async_state.request_id_counter + 1
+    async_state.request_id_counter = id
+    async_state.pending_requests[id] = true
     mp.add_timeout(0, function()
-        if not async_state.pending_requests[promise_id] then return end  -- Cancelled
-        
-        local success, result = pcall(fn)
-        if async_state.pending_requests[promise_id] then  -- Still relevant?
-            async_state.pending_requests[promise_id] = nil
-            callback(success, result)
+        if not async_state.pending_requests[id] then return end
+        local ok, res = pcall(fn)
+        if async_state.pending_requests[id] then
+            async_state.pending_requests[id] = nil
+            callback(ok, res)
         end
     end)
-    return promise_id
+    return id
 end
 
--- Cancel a pending promise
-local function cancel_promise(promise_id)
-    if promise_id then
-        async_state.pending_requests[promise_id] = nil
-    end
+local function cancel_promise(id) if id then async_state.pending_requests[id] = nil end end
+
+local function queue_deferred_task(fn, priority)
+    table.insert(async_state.task_queue, { fn = fn, priority = priority or 999, created = os.time() })
+    table.sort(async_state.task_queue, function(a,b) return a.priority < b.priority end)
 end
 
--- Deferred task queue for non-urgent work (runs when idle)
-local function queue_deferred_task(fn, priority_order)
-    table.insert(async_state.task_queue, {
-        fn = fn,
-        priority = priority_order or 999,
-        created = os.time()
-    })
-    -- Sort by priority
-    table.sort(async_state.task_queue, function(a, b)
-        return a.priority < b.priority
-    end)
-end
-
--- Process one task from queue (call periodically)
 local function process_next_deferred_task()
-    if #async_state.task_queue > 0 then
-        local task = table.remove(async_state.task_queue, 1)
-        local ok, err = pcall(task.fn)
-        if not ok then
-            debug_log("Deferred task error: " .. tostring(err), true)
-        end
-    end
+    if #async_state.task_queue == 0 then return end
+    local task = table.remove(async_state.task_queue, 1)
+    local ok, err = pcall(task.fn)
+    if not ok then debug_log("Deferred task error: "..tostring(err), true) end
 end
 
--- Build O(1) group lookup set (for is_group_preferred)
 local function rebuild_group_set()
     async_state.group_set = {}
     if JIMAKU_PREFERRED_GROUPS then
-        for _, g in ipairs(JIMAKU_PREFERRED_GROUPS) do
-            if g.enabled then
-                async_state.group_set[g.name:lower()] = true
-            end
+        for _,g in ipairs(JIMAKU_PREFERRED_GROUPS) do
+            if g.enabled then async_state.group_set[g.name:lower()] = true end
         end
     end
 end
-
--- O(1) group lookup (was O(n) linear scan)
-local function is_group_preferred_fast(group_name)
+local function is_group_preferred_fast(name)
     if not async_state.group_set then rebuild_group_set() end
-    return async_state.group_set[group_name:lower()] == true
+    return async_state.group_set[name:lower()] == true
 end
 
--- Example Cache Utility with Debug Info
-save_persistent_cache = function(file_path, data)
-    debug_log("Cache Debug: Attempting to save to " .. file_path)
+-- Cache helpers
+local function save_persistent_cache(path, data)
+    debug_log("Cache Debug: Attempting to save to "..path)
     if not utils then return end
     local json = utils.format_json(data)
-    local f = io.open(file_path, "w")
-    if f then
-        f:write(json)
-        f:close()
-        debug_log("Cache Debug: Successfully saved " .. #json .. " bytes.")
-    else
-        debug_log("Cache Debug: ERROR - Could not open file for writing: " .. file_path, true)
-    end
+    local f = io.open(path, "w")
+    if not f then debug_log("Cache Debug: ERROR - Could not open file for writing: "..path, true); return end
+    f:write(json); f:close()
+    debug_log("Cache Debug: Successfully saved "..#json.." bytes.")
 end
-load_persistent_cache = function(file_path)
-    debug_log("Cache Debug: Checking for cache at " .. file_path)
-    local f = io.open(file_path, "r")
-    if f then
-        local content = f:read("*all")
-        f:close()
-        if content and content ~= "" then
-            local data = utils.parse_json(content)
-            debug_log("Cache Debug: HIT - Loaded existing cache from disk.")
-            return data
-        end
+
+local function load_persistent_cache(path)
+    debug_log("Cache Debug: Checking for cache at "..path)
+    local f = io.open(path, "r")
+    if not f then debug_log("Cache Debug: MISS - No valid cache file found."); return {} end
+    local content = f:read("*all"); f:close()
+    if content and content ~= "" then
+        local ok, data = pcall(utils.parse_json, content)
+        if ok then debug_log("Cache Debug: HIT - Loaded existing cache from disk."); return data end
     end
     debug_log("Cache Debug: MISS - No valid cache file found.")
     return {}
 end
 
--- ============================================================================
--- ASYNC HTTP REQUEST WRAPPERS (Non-blocking API calls)
--- ============================================================================
+-- Generic subprocess + JSON helper
+local function run_subprocess(args, parse_json)
+    local res = mp.command_native({ name="subprocess", capture_stdout=true, playback_only=false, args=args })
+    if res.status ~= 0 or not res.stdout then debug_log("ASYNC: subprocess failed", true); return nil end
+    if parse_json then
+        local ok, data = pcall(utils.parse_json, res.stdout)
+        if not ok then debug_log("ASYNC: JSON parse failed", true); return nil end
+        return data
+    end
+    return res.stdout
+end
 
--- Async AniList API request (non-blocking, returns via callback)
+-- Specific API wrappers using generic helper
 local function make_anilist_request_async(query, variables, callback)
-    local promise_id = create_promise(function()
-        debug_log("ASYNC: AniList Request starting for: " .. (variables.search or "unknown"))
-        local request_body = utils.format_json({query = query, variables = variables})
-        local args = { 
-            "curl", "-s", "-X", "POST", "-m", "5",  -- Add 5s timeout
-            "-H", "Content-Type: application/json", 
-            "-H", "Accept: application/json", 
-            "--data", request_body, 
-            ANILIST_API_URL 
-        }
-        local result = mp.command_native({
-            name = "subprocess", 
-            capture_stdout = true, 
-            playback_only = false, 
-            args = args
-        })
-        if result.status ~= 0 or not result.stdout then 
-            debug_log("ASYNC: Curl request failed or returned no output", true)
-            return nil 
-        end
-        local ok, data = pcall(utils.parse_json, result.stdout)
-        if not ok then
-            debug_log("ASYNC: Failed to parse JSON response", true)
-            return nil
-        end
-        if data.errors then
-            debug_log("ASYNC: AniList API Error: " .. utils.format_json(data.errors), true)
-            return nil
-        end
+    return create_promise(function()
+        debug_log("ASYNC: AniList Request starting for: "..(variables.search or "unknown"))
+        local body = utils.format_json({ query = query, variables = variables })
+        local args = { "curl","-s","-X","POST","-m","5","-H","Content-Type: application/json","-H","Accept: application/json","--data", body, ANILIST_API_URL }
+        local data = run_subprocess(args, true)
+        if not data or data.errors then debug_log("ASYNC: AniList API Error: "..tostring(data and utils.format_json(data.errors) or "nil"), true); return nil end
         debug_log("ASYNC: AniList Request completed successfully")
         return data.data
-    end, function(success, result)
-        debug_log(string.format("ASYNC: Callback fired (success=%s)", tostring(success)))
-        callback(success, result)
-    end)
-    return promise_id
+    end, function(success, result) debug_log(string.format("ASYNC: Callback fired (success=%s)", tostring(success))); callback(success, result) end)
 end
 
--- Async Jimaku API request (non-blocking)
 local function make_jimaku_request_async(path, callback)
-    local promise_id = create_promise(function()
-        debug_log("ASYNC: Jimaku request starting: " .. path)
+    return create_promise(function()
+        debug_log("ASYNC: Jimaku request starting: "..path)
         local url = JIMAKU_API_URL .. path
-        local args = { "curl", "-s", "-m", "5", url }  -- 5s timeout
-        local result = mp.command_native({
-            name = "subprocess",
-            capture_stdout = true,
-            playback_only = false,
-            args = args
-        })
-        if result.status ~= 0 or not result.stdout then
-            debug_log("ASYNC: Jimaku request failed", true)
-            return nil
-        end
-        local ok, data = pcall(utils.parse_json, result.stdout)
-        if not ok then
-            debug_log("ASYNC: Failed to parse Jimaku JSON", true)
-            return nil
-        end
+        local args = { "curl","-s","-m","5", url }
+        local data = run_subprocess(args, true)
+        if not data then debug_log("ASYNC: Jimaku request failed", true); return nil end
         debug_log("ASYNC: Jimaku request completed")
         return data
-    end, function(success, result)
-        callback(success, result)
-    end)
-    return promise_id
+    end, function(success, result) callback(success, result) end)
 end
+
 
 -- Synchronous version for backwards compatibility (DEPRECATED: use async version instead)
 -- Load preferred groups from cache or use defaults
