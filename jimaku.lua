@@ -1085,7 +1085,7 @@ show_preferred_groups_menu = function(selected)
         end
     end
     
-    local footer = "←/→ Change Priority | ENTER Toggle | Ctrl+DEL Remove | 0 Back"
+    local footer = "↑↓ Change Priority | ENTER ON/OFF | Ctrl+DEL to Delete"
     push_menu("Release Group Priority", items, footer, on_left, on_right, selected)
 end
 
@@ -1463,7 +1463,7 @@ save_config_to_file = function()
     debug_log("========== SAVE CONFIG DEBUG END (SUCCESS) ==========")
 end
 -------------------------------------------------------------------------------
--- CUMULATIVE EPISODE CALCULATION
+-- 11 CUMULATIVE EPISODE CALCULATION
 -------------------------------------------------------------------------------
 -- Calculate cumulative episode number with confidence tracking
 local function calculate_jimaku_episode_safe(season_num, episode_num, seasons_data)
@@ -1524,7 +1524,7 @@ local function normalize_digits(s)
     return s
 end
 -------------------------------------------------------------------------------
--- JIMAKU SUBTITLE FILENAME PARSER
+-- 12 JIMAKU SUBTITLE FILENAME PARSER
 -------------------------------------------------------------------------------
 -- Parse Jimaku subtitle filename to extract episode number(s)
 parse_jimaku_filename = function(filename)
@@ -1615,7 +1615,7 @@ parse_jimaku_filename = function(filename)
     return nil, nil
 end
 -------------------------------------------------------------------------------
--- MAIN FILENAME PARSER (WITH CRITICAL HOTFIXES)
+-- 13 MAIN FILENAME PARSER (WITH CRITICAL HOTFIXES)
 -------------------------------------------------------------------------------
 -- NEW: Strip Japanese/CJK/Korean characters and clean complex titles
 local function clean_japanese_text(title)
@@ -3556,361 +3556,139 @@ local function get_search_title(parsed)
 end
 -- Main search function with integrated smart matching
 -------------------------------------------------------------------------------
--- OFFLINE FALLBACK: Search local subtitle cache when AniList/Jimaku unavailable
--- Scans SUBTITLE_CACHE_DIR for matching subtitle files based on parsed title/episode
+-- OFFLINE FALLBACK: Search local subtitle cache
 -------------------------------------------------------------------------------
 search_local_subtitle_cache = function(parsed, is_auto, anilist_id)
-    if not parsed or not parsed.title then
-        debug_log("Offline search: No parsed title available", true)
-        return false
-    end
-    local target_title = parsed.title
+    if not (parsed and parsed.title) then return false end
+
     local target_episode = tonumber(parsed.episode) or 1
     local target_season = parsed.season or 1
-    debug_log(string.format("Offline search: Looking for '%s' S%d E%d in %s (ID: %s)", 
-        target_title, target_season, target_episode, SUBTITLE_CACHE_DIR, anilist_id or "N/A"))
-    -- Scan the subtitle cache directory for matching files
+    
+    debug_log(string.format("Offline: Searching '%s' S%d E%d", parsed.title, target_season, target_episode))
+
     local subtitle_files = scan_for_subtitles(
-        SUBTITLE_CACHE_DIR, 
-        SUBTITLE_CACHE_DIR, 
-        target_title, 
-        target_episode, 
-        target_season,
-        4,  -- max_depth (Increased to 4 to support nested libraries e.g. subtitles/anime_tv/show/file)
-        anilist_id -- Pass AniList ID for precise folder verification
+        SUBTITLE_CACHE_DIR, SUBTITLE_CACHE_DIR, 
+        parsed.title, target_episode, target_season, 4, anilist_id
     )
-    if #subtitle_files == 0 then
-        debug_log("Offline search: No matching subtitles found in local cache", true)
-        return false
-    end
-    -- Sort by episode number
+
+    if #subtitle_files == 0 then return false end
+
     sort_subtitles_by_episode(subtitle_files)
-    debug_log(string.format("Offline search: Found %d matching subtitle(s) in local cache", #subtitle_files))
-    -- Load the best matches (up to JIMAKU_MAX_SUBS)
-    local max_to_load = math.min(#subtitle_files, JIMAKU_MAX_SUBS or 5)
+    
     local loaded_count = 0
+    local max_to_load = math.min(#subtitle_files, JIMAKU_MAX_SUBS or 5)
+
     for i = 1, max_to_load do
-        local sub_info = subtitle_files[i]
+        local sub = subtitle_files[i]
         local flag = (i == 1) and "select" or "auto"
-        local ep_info = sub_info.episode and string.format(" [Ep %d]", sub_info.episode) or ""
-        debug_log(string.format("Offline loading [%d/%d]%s: %s", 
-            i, max_to_load, ep_info, sub_info.name))
-        local success, err = pcall(function()
-            mp.commandv("sub-add", sub_info.path, flag)
-        end)
+        local success = pcall(function() mp.commandv("sub-add", sub.path, flag) end)
         if success then
             loaded_count = loaded_count + 1
-            table.insert(menu_state.loaded_subs_files, sub_info.name)
-        else
-            debug_log(string.format("Offline search: Failed to load %s (%s)", sub_info.name, err), true)
+            table.insert(menu_state.loaded_subs_files, sub.name)
         end
     end
+
     if loaded_count > 0 then
-        local msg = string.format("✓ OFFLINE: Loaded %d subtitle(s) from cache\n%s", 
-            loaded_count, subtitle_files[1].name)
-        conditional_osd(msg, 5, is_auto)
-        debug_log(string.format("Offline search: Successfully loaded %d subtitle(s)", loaded_count))
+        conditional_osd(string.format("✓ OFFLINE: Loaded %d subs\n%s", loaded_count, subtitle_files[1].name), 5, is_auto)
         return true
     end
     return false
 end
+
+-------------------------------------------------------------------------------
+-- ANILIST SEARCH & SYNC
+-------------------------------------------------------------------------------
 search_anilist = function(is_auto)
-    -- Try media-title first (for streams/URLs), then filename (for local files)
     local title_source = mp.get_property("media-title") or mp.get_property("filename")
-    if not title_source then return end
-    -- Check if this is a URL (protocol-based source)
-    local is_url = title_source:match("^https?://")
-    local parsed = parse_media_title(title_source)
-    if not parsed then
-        if not is_url then
-            conditional_osd("AniList: Failed to parse filename", 3, is_auto)
-        else
-            conditional_osd("AniList: Failed to parse stream title", 3, is_auto)
-        end
-        return
-    end
-    -- Get clean search title (removes "Special", "OVA" etc for better matching)
+    local parsed = title_source and parse_media_title(title_source)
+    if not parsed then return end
+
     local search_title = get_search_title(parsed)
-    if search_title ~= parsed.title then
-        debug_log(string.format("Search title cleaned: '%s' → '%s'", parsed.title, search_title))
-    end
-    conditional_osd("AniList: Searching for " .. search_title .. "...", 3, is_auto)
-    -- Check cache first
     local cache_key = search_title:lower()
-    
-    -- API Toggle Check
+
+    -- 1. Handle API Disabled or Cache
     if not USE_ANILIST_API then
-        debug_log("AniList API disabled by config - Skipping online search")
-        -- Directly try offline search since we can't get AniList ID
-        local offline_success = search_local_subtitle_cache(parsed, is_auto, nil)
-        if not offline_success then
-            conditional_osd("Online search disabled.\nNo local subtitles found.", 3, is_auto)
+        if not search_local_subtitle_cache(parsed, is_auto) then
+            conditional_osd("Online disabled. No local subs found.", 3, is_auto)
         end
         return
     end
 
-    if not STANDALONE_MODE and ANILIST_CACHE[cache_key] then
-        local cache_entry = ANILIST_CACHE[cache_key]
-        local cache_age = os.time() - cache_entry.timestamp
-        if cache_age < 86400 then  -- Cache valid for 24 hours
-            debug_log(string.format("Using cached AniList results for '%s' (%d seconds old)", 
-                search_title, cache_age))
-            local data = {Page = {media = cache_entry.results}}
-            -- Continue with the rest of the function using cached data
-        else
-            debug_log(string.format("AniList cache expired for '%s' (%d seconds old)", 
-                search_title, cache_age))
-            ANILIST_CACHE[cache_key] = nil
-        end
-    end
-    -- Make API request if not cached or cache expired
     local data
-    if not ANILIST_CACHE[cache_key] then
-        local query = [[
-        query ($search: String) {
-          Page (page: 1, perPage: 15) {
-            media (search: $search, type: ANIME) {
-              id
-              title {
-                romaji
-                english
-              }
-              synonyms
-              status
-              episodes
-              format
-            }
-          }
-        }
-        ]]
-        data = make_anilist_request(query, {search = search_title})
-        -- Cache the results
-        if data and data.Page and data.Page.media then
-            ANILIST_CACHE[cache_key] = {
-                results = data.Page.media,
-                timestamp = os.time()
-            }
-            if not STANDALONE_MODE then
-                save_ANILIST_CACHE()
-            end
-            debug_log(string.format("Cached AniList results for '%s'", search_title))
-        end
+    local cached = ANILIST_CACHE[cache_key]
+    if cached and (os.time() - cached.timestamp < 86400) then
+        data = { Page = { media = cached.results } }
     else
-        data = {Page = {media = ANILIST_CACHE[cache_key].results}}
-    end
-    -- FALLBACK: If no results, try alternative searches
-    if data and data.Page and data.Page.media and #data.Page.media == 0 then
-        debug_log("No results found - trying fallback searches...")
-        -- Fallback 1: Try original title (without cleaning)
-        if search_title ~= parsed.title then
-            debug_log("Fallback 1: Trying original title: " .. parsed.title)
-            data = make_anilist_request(query, {search = parsed.title})
-        end
-        -- Fallback 2: Try removing subtitle/arc name (text after " - ")
-        if data and data.Page and data.Page.media and #data.Page.media == 0 then
-            local base_title = search_title:match("^(.-)%s*%-%s*.+$")
-            if base_title and base_title:len() > 2 then
-                debug_log("Fallback 2: Trying base title without arc: " .. base_title)
-                data = make_anilist_request(query, {search = base_title})
+        local query = [[ query ($search: String) { Page (perPage: 15) { media (search: $search, type: ANIME) { id title { romaji english } synonyms status episodes format } } } ]]
+        data = make_anilist_request(query, {search = search_title})
+        
+        -- Fallbacks if no results
+        if not (data and data.Page.media[1]) then
+            local fallbacks = { parsed.title, search_title:match("^(.-)%s*%-%s*.+$"), search_title:match("^(%S+)") }
+            for _, alt in ipairs(fallbacks) do
+                if alt and #alt > 2 then
+                    data = make_anilist_request(query, {search = alt})
+                    if data and data.Page.media[1] then break end
+                end
             end
         end
-        -- Fallback 3: Try first word only (for complex titles)
-        if data and data.Page and data.Page.media and #data.Page.media == 0 then
-            local first_word = search_title:match("^(%S+)")
-            if first_word and first_word:len() > 3 then
-                debug_log("Fallback 3: Trying first word only: " .. first_word)
-                data = make_anilist_request(query, {search = first_word})
-            end
+
+        if data and data.Page.media then
+            ANILIST_CACHE[cache_key] = { results = data.Page.media, timestamp = os.time() }
+            if not STANDALONE_MODE then save_ANILIST_CACHE() end
         end
     end
-    if data and data.Page and data.Page.media then
+
+    -- 2. Process Results
+    if data and data.Page.media and #data.Page.media > 0 then
         local results = data.Page.media
-        -- Store for manual picker
-        menu_state.search_results = results
-        menu_state.search_results_page = 1
-        -- Extract year from filename for disambiguation
-        local file_year = extract_year(filename)
-        if file_year then
-            debug_log(string.format("Detected year in filename: %d", file_year))
-        end
-        debug_log(string.format("Analyzing %d potential matches for '%s' %sE%s...", 
-            #results, 
-            search_title,  -- Use search_title instead of parsed.title
-            parsed.season and string.format("S%d ", parsed.season) or "",
-            parsed.episode))
-        -- If we have 0 results, show helpful message
-        if #results == 0 then
-            debug_log("FAILURE: No matches found after all fallback attempts", true)
-            conditional_osd("AniList: No match found.\nTry renaming file or manual search.", 5, is_auto)
-            return
-        end
-        -- Use improved smart match algorithm (FIX #10)
-        local episode_num = tonumber(parsed.episode) or 1
-        local season_num = parsed.season
-        local selected, actual_episode, actual_season, seasons, match_method, match_confidence = 
-            smart_match_anilist(results, parsed, episode_num, season_num, file_year)
-        -- Log match quality
-        debug_log(string.format("Match Method: %s | Confidence: %s", match_method, match_confidence))
-        -- Warn user if match confidence is very low (wrong show)
-        if match_confidence == "very-low" then
-            conditional_osd("⚠ WARNING: Match uncertain - result may be wrong anime!\nPress 'A' to retry or rename file.", 8, is_auto)
-        end
-        -- Final reporting with Type/Format
-        for i, media in ipairs(results) do
-            local romaji = media.title.romaji or "N/A"
-            local total_eps = media.episodes or "??"
-            local m_format = media.format or "UNK"
-            local first_syn = (media.synonyms and media.synonyms[1]) or "None"
-            local marker = (media.id == selected.id) and ">>" or "  "
-            debug_log(string.format("%s [%d] ID: %-7s | %-7s | Eps: %-3s | Syn: %-15s | %s", 
-                marker, i, media.id, m_format, total_eps, first_syn, romaji))
-        end
-        -- Build OSD message with confidence warning
-        local osd_msg = string.format("AniList Match: %s\nID: %s | S%d E%d\nFormat: %s | Total Eps: %s", 
-            selected.title.romaji, 
-            selected.id,
-            actual_season,
-            actual_episode,
-            selected.format or "TV",
-            selected.episodes or "?")
-        -- Store match data for menu system
+        local selected, actual_ep, actual_sea, seasons, match_method, confidence = 
+            smart_match_anilist(results, parsed, tonumber(parsed.episode) or 1, parsed.season, extract_year(title_source))
+
+        -- Update Menu State
         menu_state.anilist_id = selected.id
         menu_state.current_match = {
-            title = selected.title.romaji,
-            anilist_id = selected.id,
-            episode = actual_episode,
-            season = actual_season,
-            format = selected.format,
-            total_episodes = selected.episodes,
-            match_method = match_method,
-            confidence = match_confidence,
-            anilist_entry = selected
+            title = selected.title.romaji, anilist_id = selected.id,
+            episode = actual_ep, season = actual_sea,
+            format = selected.format, total_episodes = selected.episodes, anilist_entry = selected
         }
-        menu_state.seasons_data = seasons
-        menu_state.parsed_data = parsed
-        -- Add warning for low confidence matches this stuff is just missleading legacy stuff...
-        -- if match_confidence == "very-low" then
-        --     osd_msg = osd_msg .. "\n⚠⚠ VERY LOW CONFIDENCE - Likely WRONG match!"
-        -- elseif match_confidence == "low" or match_confidence == "uncertain" then
-        --     osd_msg = osd_msg .. "\n⚠ Low confidence - verify result"
-        -- end
-        conditional_osd(osd_msg, 5, is_auto)
-        -- Try to fetch subtitles from Jimaku using smart matching
+
+        conditional_osd(string.format("Match: %s\nS%d E%d | %s", selected.title.romaji, actual_sea, actual_ep, selected.format or "TV"), 5, is_auto)
+
+        -- 3. Get Subtitles (Online -> Local)
         local jimaku_entry = search_jimaku_subtitles(selected.id)
         if jimaku_entry then
-            -- Store jimaku ID for menu system
             menu_state.jimaku_id = jimaku_entry.id
-            menu_state.jimaku_entry = jimaku_entry
-            -- Force refresh of browser files next time it's opened
-            menu_state.browser_files = nil
-            download_subtitle_smart(
-                jimaku_entry.id, 
-                actual_episode, 
-                actual_season,
-                seasons,
-                selected,  -- Pass full AniList entry for verification
-                is_auto
-            )
+            download_subtitle_smart(jimaku_entry.id, actual_ep, actual_sea, seasons, selected, is_auto)
         else
-            -- AniList match found but no Jimaku entry exists
-            -- TRY LOCAL SEARCH with confirmed ID
-            debug_log(string.format("No Jimaku entry found. Trying local search for ID %d...", selected.id))
-            local local_success = search_local_subtitle_cache(parsed, is_auto, selected.id)
-            
-            if not local_success then
-                local no_subs_msg = string.format(
-                    "No subtitles on Jimaku or Local for:\n%s (ID: %d)\n",
-                    selected.title.romaji,
-                    selected.id
-                )
-                conditional_osd(no_subs_msg, 7, is_auto)
+            if not search_local_subtitle_cache(parsed, is_auto, selected.id) then
+                conditional_osd("No subtitles found on Jimaku or Local.", 7, is_auto)
             end
         end
     else
-        -- OFFLINE FALLBACK: Search local subtitle cache when AniList/Jimaku are unavailable
-        debug_log("FAILURE: No matches found for " .. parsed.title, true)
-        debug_log("Attempting offline fallback: scanning local subtitle cache...")
-        local offline_success = search_local_subtitle_cache(parsed, is_auto)
-        if not offline_success then
-            conditional_osd("AniList: No match found.\nOffline cache search also failed.", 3, is_auto)
+        -- 4. Global Fallback
+        if not search_local_subtitle_cache(parsed, is_auto) then
+            conditional_osd("No matches found.", 3, is_auto)
         end
     end
 end
--- Initialize
+
+-------------------------------------------------------------------------------
+-- EVENTS & INIT
+-------------------------------------------------------------------------------
 if not STANDALONE_MODE then
-    -- Create subtitle cache directory
     ensure_directory(SUBTITLE_CACHE_DIR)
-    -- Note: API key is now loaded only from jimaku.conf via script_opts
-    -- Log API key status
-    if JIMAKU_API_KEY then
-        debug_log("Jimaku API key loaded from jimaku.conf")
-    else
-        debug_log("Jimaku API key not set. Please set jimaku_api_key in jimaku.conf", true)
-    end
-    -- Load caches
-    load_ANILIST_CACHE()
-    load_JIMAKU_CACHE()
-    -- Load preferred groups from cache
+    load_ANILIST_CACHE(); load_JIMAKU_CACHE()
     JIMAKU_PREFERRED_GROUPS = load_preferred_groups()
-    -- Keybind 'A' to trigger the search
-    mp.add_key_binding("A", "anilist-search", search_anilist)
-    -- Keyboard triggers for menu system (using standard bindings for script permanence)
-    mp.add_key_binding("alt+a", "jimaku-menu-alt-a", show_main_menu)
-    -- Script message for browser filtering
-    mp.register_script_message("jimaku-browser-filter", function(text)
-        apply_browser_filter(text ~= "" and text or nil)
-    end)
-    -- Script message for preferred groups
-    mp.register_script_message("jimaku-set-groups", function(text)
-        if text and text ~= "" then
-            local new_groups = {}
-            for group in string.gmatch(text, "([^,]+)") do
-                group = group:gsub("^%s*(.-)%s*$", "%1")
-                if group ~= "" then
-                    table.insert(new_groups, {name = group, enabled = true})
-                end
-            end
-            if #new_groups > 0 then
-                for _, ng in ipairs(new_groups) do
-                    local exists = false
-                    for _, eg in ipairs(JIMAKU_PREFERRED_GROUPS) do
-                        if eg.name:lower() == ng.name:lower() then exists = true break end
-                    end
-                    if not exists then
-                        table.insert(JIMAKU_PREFERRED_GROUPS, ng)
-                    end
-                end
-                debug_log("Updated preferred groups list")
-                save_preferred_groups()
-                mp.osd_message("Added groups to list", 3)
-            end
-        end
-        -- Always refresh or re-render menu if we were in Management
-        if menu_state.active and #menu_state.stack > 0 and menu_state.stack[#menu_state.stack].title == "Preferred Groups" then
-            local selected = menu_state.stack[#menu_state.stack].selected
-            pop_menu()
-            show_preferred_groups_menu(selected)
-        else
-            render_menu_osd()
+
+    mp.add_key_binding("A", "anilist-search", function() search_anilist(false) end)
+    mp.add_key_binding("alt+a", "jimaku-menu", show_main_menu)
+
+    mp.register_event("file-loaded", function()
+        menu_state.current_match, menu_state.jimaku_id, menu_state.browser_files = nil, nil, nil
+        update_loaded_subs_list()
+        if JIMAKU_AUTO_DOWNLOAD then 
+            mp.add_timeout(0.5, function() search_anilist(true) end) 
         end
     end)
-    -- Auto-download subtitles on file load if enabled (works for both local files and streams)
-    if JIMAKU_AUTO_DOWNLOAD then
-        mp.register_event("file-loaded", function()
-    -- 1. Reset state
-    menu_state.current_match = nil
-    menu_state.jimaku_id = nil
-    menu_state.browser_files = nil
-    -- 2. Update the internal count/list using the FAST index
-    update_loaded_subs_list()
-    -- 3. Trigger auto-search if enabled
-    if JIMAKU_AUTO_DOWNLOAD then
-        mp.add_timeout(0.5, function() search_anilist(true) end)
-    end
-end)
-        debug_log("AniList Script Initialized. Works on local files and streams. Press 'Alt+a' for menu.")
-    else
-        mp.register_event("file-loaded", update_loaded_subs_list)
-        debug_log("AniList Script Initialized. Press 'Alt+a' for menu.")
-    end
 end
