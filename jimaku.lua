@@ -1481,10 +1481,14 @@ end
 -------------------------------------------------------------------------------
 -- 11 CUMULATIVE EPISODE CALCULATION
 -------------------------------------------------------------------------------
--- Calculate cumulative episode number with confidence tracking
-local function calculate_jimaku_episode_safe(season_num, episode_num, seasons_data)
+-- Calculate cumulative episode number with optional confidence tracking
+local function calculate_jimaku_episode(season_num, episode_num, seasons_data, return_confidence)
     if not season_num or season_num == 1 then
-        return episode_num, "certain"
+        if return_confidence then
+            return episode_num, "certain"
+        else
+            return episode_num
+        end
     end
     -- Calculate cumulative episodes from previous seasons
     local cumulative = 0
@@ -1508,12 +1512,11 @@ local function calculate_jimaku_episode_safe(season_num, episode_num, seasons_da
         debug_log(string.format("  Calculated: S%dE%d -> Jimaku Episode %d (UNCERTAIN)", 
             season_num, episode_num, jimaku_ep), true)
     end
-    return jimaku_ep, confidence
-end
--- Wrapper for backwards compatibility (without confidence tracking)
-local function calculate_jimaku_episode(season_num, episode_num, seasons_data)
-    local result, _ = calculate_jimaku_episode_safe(season_num, episode_num, seasons_data)
-    return result
+    if return_confidence then
+        return jimaku_ep, confidence
+    else
+        return jimaku_ep
+    end
 end
 -- Reverse: Convert Jimaku cumulative episode to AniList season episode
 local function convert_jimaku_to_anilist_episode(jimaku_ep, target_season, seasons_data)
@@ -2370,9 +2373,9 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     local matches = {}
     local all_parsed = {}
     -- Calculate target cumulative episode
-    local target_cumulative = calculate_jimaku_episode(target_season or anilist_season, target_episode, seasons_data)
-    debug_log(string.format("Target: S%d E%d = Cumulative Episode %d", 
-        anilist_season, target_episode, target_cumulative))
+    local target_cumulative, target_confidence = calculate_jimaku_episode(target_season or anilist_season, target_episode, seasons_data, true)
+    debug_log(string.format("Target: S%d E%d = Cumulative Episode %d (%s)", 
+        anilist_season, target_episode, target_cumulative, target_confidence))
     -- Parse all filenames and build episode map
     for _, file in ipairs(files) do
         local jimaku_season, jimaku_episode = parse_jimaku_filename(file.name)
@@ -2435,7 +2438,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                 -- (S02E03 means 3rd episode of Season 2, where S2 started at overall episode 14)
                 if not is_match and jimaku_season == anilist_season then
                     -- Calculate what cumulative episode this would be
-                    local file_cumulative = calculate_jimaku_episode(jimaku_season, ep_num, seasons_data)
+                    local file_cumulative, file_confidence = calculate_jimaku_episode(jimaku_season, ep_num, seasons_data, true)
                     if file_cumulative == target_cumulative then
                         is_match = true
                         anilist_episode = target_episode
