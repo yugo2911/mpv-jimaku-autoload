@@ -94,8 +94,15 @@ debug_log = function(message, is_error)
     end
 end
 
--- ASYNC / HTTP utilities (consolidated, single block)
-local async_state = { pending_requests = {}, request_id_counter = 0, task_queue = {}, group_set = nil }
+----
+-- Async State
+----
+local async_state = { 
+    pending_requests = {}, 
+    request_id_counter = 0, 
+    task_queue = {}, 
+    group_set = nil 
+}
 
 local function create_promise(fn, callback)
     local id = async_state.request_id_counter + 1
@@ -112,10 +119,16 @@ local function create_promise(fn, callback)
     return id
 end
 
-local function cancel_promise(id) if id then async_state.pending_requests[id] = nil end end
+local function cancel_promise(id) 
+    if id then async_state.pending_requests[id] = nil end 
+end
 
 local function queue_deferred_task(fn, priority)
-    table.insert(async_state.task_queue, { fn = fn, priority = priority or 999, created = os.time() })
+    table.insert(async_state.task_queue, { 
+        fn = fn, 
+        priority = priority or 999, 
+        created = os.time() 
+    })
     table.sort(async_state.task_queue, function(a,b) return a.priority < b.priority end)
 end
 
@@ -134,72 +147,63 @@ local function rebuild_group_set()
         end
     end
 end
+
 local function is_group_preferred_fast(name)
     if not async_state.group_set then rebuild_group_set() end
     return async_state.group_set[name:lower()] == true
 end
 
--- Cache helpers
 local function save_persistent_cache(path, data)
-    debug_log("Cache Debug: Attempting to save to "..path)
+    debug_log("Cache: Saving to "..path)
     if not utils then return end
     local json = utils.format_json(data)
     local f = io.open(path, "w")
-    if not f then debug_log("Cache Debug: ERROR - Could not open file for writing: "..path, true); return end
+    if not f then debug_log("Cache ERROR: Cannot write "..path, true); return end
     f:write(json); f:close()
-    debug_log("Cache Debug: Successfully saved "..#json.." bytes.")
 end
 
 local function load_persistent_cache(path)
-    debug_log("Cache Debug: Checking for cache at "..path)
     local f = io.open(path, "r")
-    if not f then debug_log("Cache Debug: MISS - No valid cache file found."); return {} end
+    if not f then return {} end
     local content = f:read("*all"); f:close()
     if content and content ~= "" then
         local ok, data = pcall(utils.parse_json, content)
-        if ok then debug_log("Cache Debug: HIT - Loaded existing cache from disk."); return data end
+        if ok then return data end
     end
-    debug_log("Cache Debug: MISS - No valid cache file found.")
     return {}
 end
 
--- Generic subprocess + JSON helper
 local function run_subprocess(args, parse_json)
-    local res = mp.command_native({ name="subprocess", capture_stdout=true, playback_only=false, args=args })
-    if res.status ~= 0 or not res.stdout then debug_log("ASYNC: subprocess failed", true); return nil end
+    local res = mp.command_native({ 
+        name="subprocess", 
+        capture_stdout=true, 
+        playback_only=false, 
+        args=args 
+    })
+    if res.status ~= 0 or not res.stdout then return nil end
     if parse_json then
         local ok, data = pcall(utils.parse_json, res.stdout)
-        if not ok then debug_log("ASYNC: JSON parse failed", true); return nil end
-        return data
+        return ok and data or nil
     end
     return res.stdout
 end
 
--- Specific API wrappers using generic helper
 local function make_anilist_request_async(query, variables, callback)
     return create_promise(function()
-        debug_log("ASYNC: AniList Request starting for: "..(variables.search or "unknown"))
         local body = utils.format_json({ query = query, variables = variables })
         local args = { "curl","-s","-X","POST","-m","5","-H","Content-Type: application/json","-H","Accept: application/json","--data", body, ANILIST_API_URL }
         local data = run_subprocess(args, true)
-        if not data or data.errors then debug_log("ASYNC: AniList API Error: "..tostring(data and utils.format_json(data.errors) or "nil"), true); return nil end
-        debug_log("ASYNC: AniList Request completed successfully")
+        if not data or data.errors then return nil end
         return data.data
-    end, function(success, result) debug_log(string.format("ASYNC: Callback fired (success=%s)", tostring(success))); callback(success, result) end)
+    end, callback)
 end
 
 local function make_jimaku_request_async(path, callback)
     return create_promise(function()
-        debug_log("ASYNC: Jimaku request starting: "..path)
-        local url = JIMAKU_API_URL .. path
-        local args = { "curl","-s","-m","5", url }
-        local data = run_subprocess(args, true)
-        if not data then debug_log("ASYNC: Jimaku request failed", true); return nil end
-        debug_log("ASYNC: Jimaku request completed")
-        return data
-    end, function(success, result) callback(success, result) end)
+        local args = { "curl","-s","-m","5", JIMAKU_API_URL .. path }
+        return run_subprocess(args, true)
+    end, callback)
 end
-
 
 -- Synchronous version for backwards compatibility (DEPRECATED: use async version instead)
 -- Load preferred groups from cache or use defaults
