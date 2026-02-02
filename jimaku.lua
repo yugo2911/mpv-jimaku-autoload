@@ -13,7 +13,7 @@ local script_opts = {
     JIMAKU_MENU_TIMEOUT  = 30,
     JIMAKU_FONT_SIZE     = 16,
     INITIAL_OSD_MESSAGES = true,
-    LOG_FILE             = false,
+    LOG_FILE             = true,
     USE_ANILIST_API      = true,
     USE_JIMAKU_API       = true
 }
@@ -154,12 +154,27 @@ local function is_group_preferred_fast(name)
 end
 
 local function save_persistent_cache(path, data)
-    debug_log("Cache: Saving to "..path)
+    debug_log("Cache: Saving to " .. path)
     if not utils then return end
+    
+    -- Ensure directory exists before writing
+    local dir = path:match("^(.*[/\\])")
+    if dir and not STANDALONE_MODE then
+        mp.command_native({
+            name = "subprocess",
+            args = {"mkdir", "-p", dir},
+            playback_only = false
+        })
+    end
+
     local json = utils.format_json(data)
     local f = io.open(path, "w")
-    if not f then debug_log("Cache ERROR: Cannot write "..path, true); return end
-    f:write(json); f:close()
+    if not f then 
+        debug_log("Cache ERROR: Cannot write " .. path, true) 
+        return 
+    end
+    f:write(json)
+    f:close()
 end
 
 local function load_persistent_cache(path)
@@ -3614,16 +3629,25 @@ end
 -------------------------------------------------------------------------------
 -- ANILIST SEARCH & SYNC
 -------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-- ANILIST SEARCH & SYNC (WITH LOGGING)
+-------------------------------------------------------------------------------
 search_anilist = function(is_auto)
     local title_source = mp.get_property("media-title") or mp.get_property("filename")
+    debug_log("Search: Starting AniList sync for: " .. tostring(title_source))
+    
     local parsed = title_source and parse_media_title(title_source)
-    if not parsed then return end
+    if not parsed then 
+        debug_log("Search ERROR: Failed to parse title source", true)
+        return 
+    end
 
     local search_title = get_search_title(parsed)
     local cache_key = search_title:lower()
 
     -- 1. Handle API Disabled or Cache
     if not USE_ANILIST_API then
+        debug_log("Search: API disabled, skipping to local cache.")
         if not search_local_subtitle_cache(parsed, is_auto) then
             conditional_osd("Online disabled. No local subs found.", 3, is_auto)
         end
@@ -3632,63 +3656,106 @@ search_anilist = function(is_auto)
 
     local data
     local cached = ANILIST_CACHE[cache_key]
-    if cached and (os.time() - cached.timestamp < 86400) then
+    
+    if cached and (os.time() - (cached.timestamp or 0) < 86400) then
+        debug_log("Search: Using cached results for '" .. search_title .. "'")
         data = { Page = { media = cached.results } }
     else
-        local query = [[ query ($search: String) { Page (perPage: 15) { media (search: $search, type: ANIME) { id title { romaji english } synonyms status episodes format } } } ]]
+        debug_log("Search: Requesting AniList API for '" .. search_title .. "'")
+        local query = [[ 
+        query ($search: String) { 
+            Page (perPage: 15) { 
+                media (search: $search, type: ANIME) { 
+                    id 
+                    title { romaji english } 
+                    synonyms status episodes format 
+                } 
+            } 
+        } ]]
+        
         data = make_anilist_request(query, {search = search_title})
         
-        -- Fallbacks if no results
-        if not (data and data.Page.media[1]) then
-            local fallbacks = { parsed.title, search_title:match("^(.-)%s*%-%s*.+$"), search_title:match("^(%S+)") }
+        -- Fallbacks
+        if not (data and data.Page.media and #data.Page.media > 0) then
+            debug_log("Search: No initial results, trying fallbacks...")
+            local fallbacks = { 
+                parsed.title, 
+                search_title:match("^(.-)%s*%-%s*.+$"), 
+                search_title:match("^(%S+)") 
+            }
             for _, alt in ipairs(fallbacks) do
-                if alt and #alt > 2 then
+                if alt and #alt > 2 and alt ~= search_title then
+                    debug_log("Search: Trying fallback: " .. alt)
                     data = make_anilist_request(query, {search = alt})
-                    if data and data.Page.media[1] then break end
+                    if data and data.Page.media and #data.Page.media > 0 then 
+                        debug_log("Search: Fallback success with: " .. alt)
+                        break 
+                    end
                 end
             end
         end
 
-        if data and data.Page.media then
+        if data and data.Page.media and #data.Page.media > 0 then
             ANILIST_CACHE[cache_key] = { results = data.Page.media, timestamp = os.time() }
             if not STANDALONE_MODE then save_ANILIST_CACHE() end
+        else
+            debug_log("Search: No results found after fallbacks.", true)
         end
     end
 
     -- 2. Process Results
     if data and data.Page.media and #data.Page.media > 0 then
         local results = data.Page.media
+        debug_log(string.format("Search: Processing %d potential matches...", #results))
+        
         local selected, actual_ep, actual_sea, seasons, match_method, confidence = 
             smart_match_anilist(results, parsed, tonumber(parsed.episode) or 1, parsed.season, extract_year(title_source))
 
-        -- Update Menu State
-        menu_state.anilist_id = selected.id
-        menu_state.current_match = {
-            title = selected.title.romaji, anilist_id = selected.id,
-            episode = actual_ep, season = actual_sea,
-            format = selected.format, total_episodes = selected.episodes, anilist_entry = selected
-        }
+        if selected then
+            debug_log(string.format("Match Found: %s (ID: %s) | Conf: %s | Method: %s", 
+                selected.title.romaji, selected.id, tostring(confidence), tostring(match_method)))
 
-        conditional_osd(string.format("Match: %s\nS%d E%d | %s", selected.title.romaji, actual_sea, actual_ep, selected.format or "TV"), 5, is_auto)
+            menu_state.anilist_id = selected.id
+            menu_state.current_match = {
+                title = selected.title.romaji, 
+                anilist_id = selected.id,
+                episode = actual_ep, 
+                season = actual_sea,
+                format = selected.format, 
+                total_episodes = selected.episodes, 
+                anilist_entry = selected
+            }
 
-        -- 3. Get Subtitles (Online -> Local)
-        local jimaku_entry = search_jimaku_subtitles(selected.id)
-        if jimaku_entry then
-            menu_state.jimaku_id = jimaku_entry.id
-            download_subtitle_smart(jimaku_entry.id, actual_ep, actual_sea, seasons, selected, is_auto)
+            conditional_osd(string.format("Match: %s\nS%d E%d | %s", 
+                selected.title.romaji, actual_sea, actual_ep, selected.format or "TV"), 5, is_auto)
+
+            -- 3. Get Subtitles
+            debug_log("Jimaku: Searching subtitles for AniList ID " .. selected.id)
+            local jimaku_entry = search_jimaku_subtitles(selected.id)
+            if jimaku_entry then
+                debug_log("Jimaku: Found entry " .. jimaku_entry.id .. ". Starting download...")
+                menu_state.jimaku_id = jimaku_entry.id
+                download_subtitle_smart(jimaku_entry.id, actual_ep, actual_sea, seasons, selected, is_auto)
+            else
+                debug_log("Jimaku: No entry found on Jimaku.cc, checking local cache...")
+                if not search_local_subtitle_cache(parsed, is_auto, selected.id) then
+                    debug_log("Search: No subtitles found anywhere.", true)
+                    conditional_osd("No subtitles found on Jimaku or Local.", 7, is_auto)
+                end
+            end
         else
-            if not search_local_subtitle_cache(parsed, is_auto, selected.id) then
-                conditional_osd("No subtitles found on Jimaku or Local.", 7, is_auto)
+            debug_log("Search: smart_match_anilist failed to find a confident match.", true)
+            if not search_local_subtitle_cache(parsed, is_auto) then
+                conditional_osd("No confident matches found.", 3, is_auto)
             end
         end
     else
-        -- 4. Global Fallback
+        debug_log("Search: Global fallback - checking local cache as last resort.")
         if not search_local_subtitle_cache(parsed, is_auto) then
             conditional_osd("No matches found.", 3, is_auto)
         end
     end
 end
-
 -------------------------------------------------------------------------------
 -- EVENTS & INIT
 -------------------------------------------------------------------------------
