@@ -435,7 +435,7 @@ show_current_match_info_action = function()
         m.confidence or "N/A"
     )
     
-    mp.osd_message(info, 8)
+    mp.osd_message(info, 6)
     pop_menu()
 end
 
@@ -593,8 +593,106 @@ end
 show_subtitles_menu = show_download_menu
 
 -------------------------------------------------------------------------------
--- 3. SUBTITLE BROWSER (PAGINATED)
+-- 3. PAGINATED MENU GENERIC FUNCTION
 -------------------------------------------------------------------------------
+
+-- Generic function to display paginated menus
+-- Parameters:
+--   title_text: Base title for the menu (e.g., "Browse Jimaku Subs")
+--   items_source: The full table of items to display (e.g., menu_state.browser_files)
+--   current_page_key: String key in menu_state to track the current page (e.g., "browser_page")
+--   item_formatter: Function(item, display_idx) -> {text, hint, disabled} for a single item
+--   item_action_builder: Function(item) -> Function() -> action for a single item
+--   footer_text: Optional footer message
+--   on_left_action: Optional function to call on left arrow (besides pagination)
+--   on_right_action: Optional function to call on right arrow (besides pagination)
+local function show_paginated_menu(title_text, items_source, current_page_key, item_formatter, item_action_builder, footer_text, on_left_action, on_right_action)
+    local page = menu_state[current_page_key] or 1
+    local per_page = menu_state.items_per_page
+    local total_pages = math.ceil(#items_source / per_page)
+
+    -- Ensure page is valid
+    if page > total_pages and total_pages > 0 then page = total_pages end
+    if page < 1 then page = 1 end
+    menu_state[current_page_key] = page -- Update state
+
+    local start_idx = (page - 1) * per_page + 1
+    local end_idx = math.min(start_idx + per_page - 1, #items_source)
+
+    local menu_items = {}
+    for i = start_idx, end_idx do
+        local item_data = items_source[i]
+        local display_idx = i - start_idx + 1
+        local formatted = item_formatter(item_data, display_idx)
+        table.insert(menu_items, {
+            text = formatted.text,
+            hint = formatted.hint,
+            disabled = formatted.disabled,
+            action = item_action_builder(item_data)
+        })
+    end
+
+    table.insert(menu_items, {text = "0. Back", action = pop_menu})
+
+    local on_left_nav = function()
+        if page > 1 then
+            menu_state[current_page_key] = page - 1
+            pop_menu() -- Pop current to re-render
+            -- Recurse to show updated page
+            show_paginated_menu(title_text, items_source, current_page_key, item_formatter, item_action_builder, footer_text, on_left_action, on_right_action)
+        end
+        if on_left_action then on_left_action() end
+    end
+
+    local on_right_nav = function()
+        if page < total_pages then
+            menu_state[current_page_key] = page + 1
+            pop_menu() -- Pop current to re-render
+            -- Recurse to show updated page
+            show_paginated_menu(title_text, items_source, current_page_key, item_formatter, item_action_builder, footer_text, on_left_action, on_right_action)
+        end
+        if on_right_action then on_right_action() end
+    end
+    
+    local final_title = string.format("%s (%d/%d) - Total %d", 
+        title_text, page, total_pages, #items_source)
+    
+    push_menu(final_title, menu_items, footer_text, on_left_nav, on_right_nav)
+end
+
+-------------------------------------------------------------------------------
+-- 4. SUBTITLE BROWSER (PAGINATED - using generic function)
+-------------------------------------------------------------------------------
+
+-- Helper for sorting browser files logically
+logical_sort_files = function(files)
+    table.sort(files, function(a, b)
+        local s_a, e_a = parse_jimaku_filename(a.name)
+        local s_b, e_b = parse_jimaku_filename(b.name)
+        
+        -- 1. Primary: Season
+        if s_a ~= s_b then
+            if s_a and s_b then return s_a < s_b end
+            return s_a ~= nil -- Non-nil seasons come first
+        end
+        
+        -- 2. Secondary: Episode
+        if e_a ~= e_b then
+            local num_a, num_b = tonumber(e_a), tonumber(e_b)
+            if num_a and num_b then
+                if num_a ~= num_b then return num_a < num_b end
+            elseif num_a then return true
+            elseif num_b then return false
+            elseif e_a and e_b then 
+                return tostring(e_a) < tostring(e_b)
+            end
+            return e_a ~= nil -- Non-nil episodes come first
+        end
+        
+        -- 3. Tertiary: Filename (Lowercase for stability)
+        return a.name:lower() < b.name:lower()
+    end)
+end
 
 -- Subtitle Browser (Paginated)
 show_subtitle_browser = function()
@@ -693,102 +791,37 @@ show_subtitle_browser = function()
         end
     end
     
-    local page = menu_state.browser_page
-    local per_page = menu_state.items_per_page
-    local total_pages = math.ceil(#filtered_files / per_page)
-    
-    -- Ensure page is valid after filtering
-    if page > total_pages and total_pages > 0 then page = total_pages end
-    if page < 1 then page = 1 end
-    
-    local start_idx = (page - 1) * per_page + 1
-    local end_idx = math.min(start_idx + per_page - 1, #filtered_files)
-    
-    local items = {}
-    for i = start_idx, end_idx do
-        local file = filtered_files[i]
-        local display_idx = i - start_idx + 1
-        
-        -- We skip the parse_jimaku_filename part entirely since we don't want S/E
+    -- Item formatter for subtitle browser
+    local subtitle_item_formatter = function(file, display_idx)
         local is_loaded = false
         for _, loaded_name in ipairs(menu_state.loaded_subs_files) do
             if loaded_name == file.name then is_loaded = true break end
         end
-        
-        -- Removed 'display_num' from the format string below
         local item_text = string.format("{\\fs%d}%d. %s", JIMAKU_FONT_SIZE - 2, display_idx, file.name)
         if is_loaded then item_text = "✓ " .. item_text end
-        
-        table.insert(items, {
-            text = item_text,
-            action = function() download_selected_subtitle_action(file) end
-        })
+        return {text = item_text, hint = nil, disabled = false}
     end
-    
-    table.insert(items, {text = "0. Back", action = pop_menu})
-    
-    -- Pagination callbacks
-    local on_left = function()
-        if page > 1 then
-            menu_state.browser_page = page - 1
-            pop_menu()
-            show_subtitle_browser()
-        end
+
+    -- Action builder for subtitle browser
+    local subtitle_action_builder = function(file)
+        return function() download_selected_subtitle_action(file) end
     end
-    
-    local on_right = function()
-        if page < total_pages then
-            menu_state.browser_page = page + 1
-            pop_menu()
-            show_subtitle_browser()
-        end
-    end
-    
-    -- Footer labels (non-numbered shortcuts)
-    local footer = "←/→ Page | [F] Filter | [X] Clear | [UP/DOWN] Select"
+
     local title_prefix = menu_state.browser_filter and string.format("FILTERED: '%s' ", menu_state.browser_filter) or ""
-    local title = string.format("%sBrowse Jimaku Subs (%d/%d) - Total %d", 
-        title_prefix, page, total_pages, #filtered_files)
+    local footer = "←/→ Page | [F] Filter | [X] Clear | [UP/DOWN] Select"
     
-    push_menu(title, items, footer, on_left, on_right)
+    show_paginated_menu(
+        title_prefix .. "Browse Jimaku Subs",
+        filtered_files,
+        "browser_page",
+        subtitle_item_formatter,
+        subtitle_action_builder,
+        footer
+    )
 end
 
 -------------------------------------------------------------------------------
--- 4. HELPER FUNCTIONS FOR BROWSER
--------------------------------------------------------------------------------
-
--- Helper for sorting browser files logically
-logical_sort_files = function(files)
-    table.sort(files, function(a, b)
-        local s_a, e_a = parse_jimaku_filename(a.name)
-        local s_b, e_b = parse_jimaku_filename(b.name)
-        
-        -- 1. Primary: Season
-        if s_a ~= s_b then
-            if s_a and s_b then return s_a < s_b end
-            return s_a ~= nil -- Non-nil seasons come first
-        end
-        
-        -- 2. Secondary: Episode
-        if e_a ~= e_b then
-            local num_a, num_b = tonumber(e_a), tonumber(e_b)
-            if num_a and num_b then
-                if num_a ~= num_b then return num_a < num_b end
-            elseif num_a then return true
-            elseif num_b then return false
-            elseif e_a and e_b then 
-                return tostring(e_a) < tostring(e_b)
-            end
-            return e_a ~= nil -- Non-nil episodes come first
-        end
-        
-        -- 3. Tertiary: Filename (Lowercase for stability)
-        return a.name:lower() < b.name:lower()
-    end)
-end
-
--------------------------------------------------------------------------------
--- 5. ANILIST RESULTS BROWSER (PAGINATED)
+-- 5. ANILIST RESULTS BROWSER (PAGINATED - using generic function)
 -------------------------------------------------------------------------------
 
 -- AniList Results Browser (Paginated)
@@ -799,53 +832,36 @@ show_search_results_menu = function()
         return
     end
     
-    local page = menu_state.search_results_page
-    local per_page = menu_state.items_per_page
-    local total_pages = math.ceil(#results / per_page)
-    
-    local start_idx = (page - 1) * per_page + 1
-    local end_idx = math.min(start_idx + per_page - 1, #results)
-    
-    local items = {}
-    for i = start_idx, end_idx do
-        local media = results[i]
+    -- Item formatter for AniList results
+    local anilist_item_formatter = function(media, display_idx)
         local title = media.title.romaji or "Unknown Title"
         local year = media.seasonYear and (" [" .. media.seasonYear .. "]") or ""
         local format = media.format and (" (" .. media.format .. ")") or ""
         local is_current = (menu_state.current_match and menu_state.current_match.anilist_id == media.id)
         local prefix = is_current and "✓ " or ""
-        
-        table.insert(items, {
-            text = string.format("%d. %s%s", (i - start_idx + 1), prefix, title),
+        return {
+            text = string.format("%d. %s%s", display_idx, prefix, title),
             hint = format .. year,
-            action = function()
-                select_anilist_result(media)
-            end
-        })
+            disabled = false
+        }
     end
-    
-    table.insert(items, {text = "0. Back", action = pop_menu})
-    
-    -- Pagination callbacks
-    local on_left = function()
-        if page > 1 then
-            menu_state.search_results_page = page - 1
-            pop_menu()
-            show_search_results_menu()
-        end
+
+    -- Action builder for AniList results
+    local anilist_action_builder = function(media)
+        return function() select_anilist_result(media) end
     end
-    
-    local on_right = function()
-        if page < total_pages then
-            menu_state.search_results_page = page + 1
-            pop_menu()
-            show_search_results_menu()
-        end
-    end
-    
-    local title = string.format("AniList Results (Page %d/%d)", page, total_pages)
+
+    local title = "AniList Results"
     local footer = "←/→ Page | [UP/DOWN] Scroll | [ENTER] Select"
-    push_menu(title, items, footer, on_left, on_right)
+    
+    show_paginated_menu(
+        title,
+        results,
+        "search_results_page",
+        anilist_item_formatter,
+        anilist_action_builder,
+        footer
+    )
 end
 
 -------------------------------------------------------------------------------
