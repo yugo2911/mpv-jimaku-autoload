@@ -51,4 +51,5 @@ Alt + A to open up the menu, [theme is ModernZ](https://github.com/Samillion/Mod
     │
     └── Browse, search, manage subtitles
 ```
-It works~ for gettings subs from jimaku, some GUI options are WIP
+> [!NOTE]
+> Some GUI options are WIP
