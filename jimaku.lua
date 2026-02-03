@@ -3509,9 +3509,6 @@ local function make_anilist_request(query, variables)
     return data.data
 end
 -------------------------------------------------------------------------------
--- SMART MATCH ALGORITHM (FIXED)
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
 -- SMART MATCH ALGORITHM (FIXED - with relations/SEQUEL graph walking)
 -------------------------------------------------------------------------------
 local function smart_match_anilist(results, parsed, episode_num, season_num, file_year)
