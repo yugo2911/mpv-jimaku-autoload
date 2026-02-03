@@ -3433,6 +3433,9 @@ end
 -------------------------------------------------------------------------------
 -- SMART MATCH ALGORITHM (FIXED)
 -------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-- SMART MATCH ALGORITHM (FIXED - with relations/SEQUEL graph walking)
+-------------------------------------------------------------------------------
 local function smart_match_anilist(results, parsed, episode_num, season_num, file_year)
     local selected = results[1]  -- Default to best search match
     local actual_episode = episode_num
@@ -3440,21 +3443,19 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
     local match_method = "default"
     local match_confidence = "low"
     local seasons = {}
+
     -- FIX #10: Weight different signals
     local has_explicit_season = (season_num and season_num >= 2)
     local has_special_indicator = parsed.is_special
-    -- Priority scoring system:
-    -- Explicit season marker in filename = 10 points (highest trust)
-    -- Special keyword in filename = 5 points
-    -- Episode number exceeds S1 count = 3 points (suggests later season)
+
     local explicit_season_weight = has_explicit_season and 10 or 0
     local special_weight = has_special_indicator and 5 or 0
+
     -- NEW: Check title similarity to prevent completely wrong matches
     local function check_title_similarity(media)
         local search_terms = parsed.title:lower():gsub("[%s%-%._]", "")
         local romaji = (media.title.romaji or ""):lower():gsub("[%s%-%._]", "")
         local english = (media.title.english or ""):lower():gsub("[%s%-%._]", "")
-        -- Check if any significant word from search appears in title
         for word in search_terms:gmatch("%w+") do
             if word:len() >= 3 then
                 if romaji:match(word) or english:match(word) then
@@ -3462,7 +3463,6 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
                 end
             end
         end
-        -- Check synonyms
         if media.synonyms then
             for _, syn in ipairs(media.synonyms) do
                 local syn_clean = syn:lower():gsub("[%s%-%._]", "")
@@ -3475,16 +3475,105 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
         end
         return false
     end
+
     -- If first result seems completely unrelated, log warning
     if not check_title_similarity(selected) then
         debug_log("WARNING: First result may not match - titles seem unrelated", true)
         match_confidence = "very-low"
     end
+
     debug_log(string.format("Smart Match Weights: Explicit Season=%d, Special=%d", 
         explicit_season_weight, special_weight))
+
+    ---------------------------------------------------------------------------
+    -- SHARED HELPER: Walk the SEQUEL relation chain from a given root entry
+    -- Returns a table: { [1] = root_entry, [2] = sequel_entry, [3] = ... }
+    -- Each value is the raw AniList media node (has .id, .title, .episodes, etc.)
+    -- Only follows edges where node.format == "TV" to skip movies/specials
+    ---------------------------------------------------------------------------
+    local function build_sequel_chain(root_entry)
+        local chain = { [1] = root_entry }
+        local current = root_entry
+        -- Walk up to 10 levels deep (covers any realistic season count)
+        for depth = 1, 10 do
+            if not current.relations or not current.relations.edges then
+                break  -- No relations data on this node, stop
+            end
+            local found_sequel = false
+            for _, edge in ipairs(current.relations.edges) do
+                -- Only follow SEQUEL edges to TV entries
+                -- SEQUEL is the forward direction: S1 -> SEQUEL -> S2
+                if edge.relationType == "SEQUEL" 
+                   and edge.node 
+                   and edge.node.format == "TV" then
+                    chain[depth + 1] = edge.node
+                    current = edge.node
+                    found_sequel = true
+                    debug_log(string.format("  Chain[%d]: %s (ID:%s, %d eps)", 
+                        depth + 1, 
+                        edge.node.title.romaji or "?", 
+                        tostring(edge.node.id), 
+                        edge.node.episodes or 0))
+                    break  -- Only one SEQUEL per entry (take the first)
+                end
+            end
+            if not found_sequel then break end
+        end
+        return chain
+    end
+
+    ---------------------------------------------------------------------------
+    -- SHARED HELPER: Find the best S1 candidate from the flat results list
+    -- "Best S1" = title-matches the search AND has no season/part marker in its own title
+    -- This is the entry we start the SEQUEL walk from
+    ---------------------------------------------------------------------------
+    local function find_s1_candidate()
+        for _, media in ipairs(results) do
+            if check_title_similarity(media) and media.format == "TV" then
+                local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
+                for _, syn in ipairs(media.synonyms or {}) do
+                    full_text = full_text .. " " .. syn
+                end
+                local full_lower = full_text:lower()
+                -- Skip anything that explicitly declares itself as a later season/part
+                if not full_lower:match("season%s*[2-9]") and 
+                   not full_lower:match("2nd%s+season") and
+                   not full_lower:match("3rd%s+season") and
+                   not full_lower:match("part%s*[2-9]") then
+                    debug_log(string.format("  S1 candidate: %s (ID:%s, %d eps)", 
+                        media.title.romaji or "?", tostring(media.id), media.episodes or 0))
+                    return media
+                end
+            end
+        end
+        return nil
+    end
+
+    ---------------------------------------------------------------------------
+    -- SHARED HELPER: Populate the seasons{} table from a chain
+    -- seasons{} is what gets passed downstream to calculate_jimaku_episode
+    -- Structure: { [1]={media=entry, eps=N, name="..."}, [2]={...}, ... }
+    ---------------------------------------------------------------------------
+    local function populate_seasons_from_chain(chain)
+        local s = {}
+        for idx, entry in pairs(chain) do
+            if entry and entry.episodes then
+                s[idx] = { media = entry, eps = entry.episodes, name = entry.title.romaji or "?" }
+            end
+        end
+        return s
+    end
+
+    ---------------------------------------------------------------------------
     -- PRIORITY 1: Explicit Season Number (HIGHEST weight)
-    -- If user has S2/S3 in filename, this should override special detection
+    -- Filename has S2/S3/etc. Two attempts:
+    --   Step A: flat text search on the results list (fast, works if AniList
+    --           returned the S2 entry directly in the top-15 search results)
+    --   Step B: SEQUEL graph walk (fallback — works even if S2 entry wasn't
+    --           in the search results, as long as S1 was)
+    ---------------------------------------------------------------------------
     if has_explicit_season then
+        -- STEP A: Flat text search (existing logic, unchanged)
         for i, media in ipairs(results) do
             local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
             for _, syn in ipairs(media.synonyms or {}) do
@@ -3513,67 +3602,129 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
                 actual_season = season_num
                 match_method = "explicit_season"
                 match_confidence = "high"
-                debug_log(string.format("MATCH: Explicit Season %d via '%s' (HIGH CONFIDENCE)", 
+                debug_log(string.format("MATCH [Step A]: Explicit Season %d via '%s' (HIGH)", 
                     season_num, search_pattern))
-                -- Store this season's data
                 seasons[season_num] = {media = media, eps = media.episodes or 13, name = media.title.romaji}
+                -- Also try to fill in earlier seasons from the flat list for cumulative calc
+                for _, m in ipairs(results) do
+                    if m.id ~= media.id and check_title_similarity(m) and m.format == "TV" then
+                        local ft = (m.title.romaji or "") .. " " .. (m.title.english or "")
+                        for _, syn in ipairs(m.synonyms or {}) do ft = ft .. " " .. syn end
+                        if not seasons[1] and not ft:lower():match("season") and not ft:lower():match("part") then
+                            seasons[1] = {media = m, eps = m.episodes or 13, name = m.title.romaji}
+                        end
+                    end
+                end
                 return selected, actual_episode, actual_season, seasons, match_method, match_confidence
             end
         end
-        -- If we have explicit season but didn't find match, log warning
-        debug_log(string.format("WARNING: S%d specified but no matching season entry found in results", 
+
+        -- STEP B: SEQUEL graph walk (this is the fix for Frieren and similar cases)
+        debug_log(string.format("  Step A missed S%d — trying SEQUEL walk...", season_num))
+        local s1 = find_s1_candidate()
+        if s1 then
+            local chain = build_sequel_chain(s1)
+            debug_log(string.format("  Built chain of %d entries", #chain))
+
+            if chain[season_num] then
+                selected = chain[season_num]
+                actual_episode = episode_num
+                actual_season = season_num
+                match_method = "relations_sequel_walk"
+                match_confidence = "high"
+                seasons = populate_seasons_from_chain(chain)
+                debug_log(string.format("MATCH [Step B]: SEQUEL walk landed on S%d '%s' (HIGH)", 
+                    season_num, selected.title.romaji or "?"))
+                return selected, actual_episode, actual_season, seasons, match_method, match_confidence
+            else
+                debug_log(string.format("  SEQUEL chain only has %d entries, need S%d", #chain, season_num), true)
+            end
+        else
+            debug_log("  No S1 candidate found for SEQUEL walk", true)
+        end
+
+        -- Both steps failed
+        debug_log(string.format("WARNING: S%d specified but no matching entry found (flat or graph)", 
             season_num), true)
     end
-    -- PRIORITY 1.5: "Part 2"/"Part 3" detection (HIGH weight)
-    -- Check if filename has "Part X" and match it with AniList entries
+
+    ---------------------------------------------------------------------------
+    -- PRIORITY 1.5: "Part 2"/"Part 3" in the title (HIGH weight)
+    -- Same two-step approach: flat text first, SEQUEL walk if that fails
+    ---------------------------------------------------------------------------
     if not has_explicit_season then
         local part_num = parsed.title:match("%s+Part%s+(%d+)$")
         if part_num then
             local part_int = tonumber(part_num)
             debug_log(string.format("Searching for 'Part %d' in results...", part_int))
+
+            -- STEP A: flat text
             for i, media in ipairs(results) do
                 local full_text = (media.title.romaji or "") .. " " .. (media.title.english or "")
                 for _, syn in ipairs(media.synonyms or {}) do
                     full_text = full_text .. " " .. syn
                 end
-                -- Check if this entry has "Part X" in title
                 if full_text:lower():match("part%s*" .. part_int) then
                     selected = media
                     actual_episode = episode_num
-                    actual_season = part_int  -- Treat Part as season for jimaku
+                    actual_season = part_int
                     match_method = "part_match"
                     match_confidence = "high"
-                    debug_log(string.format("MATCH: Found 'Part %d' entry (HIGH CONFIDENCE)", part_int))
-                    -- Store as season for cumulative calculation
+                    debug_log(string.format("MATCH [Part Step A]: 'Part %d' text match (HIGH)", part_int))
                     seasons[part_int] = {media = media, eps = media.episodes or 13, name = media.title.romaji}
                     return selected, actual_episode, actual_season, seasons, match_method, match_confidence
                 end
             end
-            debug_log(string.format("WARNING: Part %d in filename but no matching AniList entry found", part_int), true)
+
+            -- STEP B: SEQUEL walk — treat Part N same as Season N
+            debug_log(string.format("  Part %d text match missed — trying SEQUEL walk...", part_int))
+            local s1 = find_s1_candidate()
+            if s1 then
+                local chain = build_sequel_chain(s1)
+                if chain[part_int] then
+                    selected = chain[part_int]
+                    actual_episode = episode_num
+                    actual_season = part_int
+                    match_method = "part_relations_sequel_walk"
+                    match_confidence = "high"
+                    seasons = populate_seasons_from_chain(chain)
+                    debug_log(string.format("MATCH [Part Step B]: SEQUEL walk landed on Part %d '%s' (HIGH)", 
+                        part_int, selected.title.romaji or "?"))
+                    return selected, actual_episode, actual_season, seasons, match_method, match_confidence
+                end
+            end
+
+            debug_log(string.format("WARNING: Part %d in filename but no matching entry found", part_int), true)
         end
     end
+
+    ---------------------------------------------------------------------------
     -- PRIORITY 2: Special/OVA Format (MEDIUM-HIGH weight)
-    -- Only if no explicit season number, OR if explicit season also has special keyword
+    -- No changes needed here — specials don't have season chains
+    ---------------------------------------------------------------------------
     if has_special_indicator and not has_explicit_season then
         for i, media in ipairs(results) do
             if media.format == "SPECIAL" or media.format == "OVA" or media.format == "ONA" then
                 selected = media
                 actual_episode = episode_num
-                actual_season = 1  -- Specials usually don't have seasons
+                actual_season = 1
                 match_method = "special_format"
                 match_confidence = "medium-high"
-                debug_log(string.format("MATCH: Special/OVA format '%s' (MEDIUM-HIGH CONFIDENCE)", 
-                    media.format))
+                debug_log(string.format("MATCH: Special/OVA format '%s' (MEDIUM-HIGH)", media.format))
                 return selected, actual_episode, actual_season, seasons, match_method, match_confidence
             end
         end
     end
+
+    ---------------------------------------------------------------------------
     -- PRIORITY 3: Cumulative Episode Calculation (MEDIUM weight)
-    -- If episode number exceeds first result's count, try to find correct season
-    -- BUT: If first result is clearly the right show (title matches) and has unknown episode count,
-    -- don't trigger cumulative - just use it as-is
+    -- Episode number exceeds S1's episode count — figure out which season it
+    -- actually belongs to.  Now uses SEQUEL walk as fallback for building the
+    -- season list, instead of relying solely on flat text matching.
+    ---------------------------------------------------------------------------
     local first_result_unknown_eps = (selected.episodes == nil or selected.episodes == 0)
     local first_result_title_matches = check_title_similarity(selected)
+
     if not has_explicit_season and episode_num > (selected.episodes or 0) then
         -- If first result clearly matches title but has unknown episode count, use it anyway
         if first_result_unknown_eps and first_result_title_matches then
@@ -3582,10 +3733,11 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
             match_confidence = "medium"
             return selected, actual_episode, actual_season, seasons, match_method, match_confidence
         end
+
         debug_log("Episode number exceeds S1 count - attempting cumulative calculation")
-        -- Build season list (only include entries with title similarity)
+
+        -- STEP A: Try to build seasons{} from flat results text matching (existing logic)
         for i, media in ipairs(results) do
-            -- Skip entries that don't match the search title at all
             if not check_title_similarity(media) then
                 debug_log(string.format("  Skipping unrelated entry: %s", media.title.romaji or "N/A"))
                 goto skip_media
@@ -3595,7 +3747,6 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
                 for _, syn in ipairs(media.synonyms or {}) do
                     full_text = full_text .. " " .. syn
                 end
-                -- Season/Part 1 (no season/part marker)
                 if not seasons[1] and not full_text:lower():match("season") and 
                    not full_text:lower():match("part") and
                    not full_text:lower():match("%dnd") and 
@@ -3603,13 +3754,11 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
                    not full_text:lower():match("%dth") then
                     seasons[1] = {media = media, eps = media.episodes, name = media.title.romaji}
                 end
-                -- Season/Part 2
                 if not seasons[2] and (full_text:lower():match("2nd%s+season") or 
                    full_text:lower():match("season%s*2") or
                    full_text:lower():match("part%s*2")) then
                     seasons[2] = {media = media, eps = media.episodes, name = media.title.romaji}
                 end
-                -- Season/Part 3
                 if not seasons[3] and (full_text:lower():match("3rd%s+season") or 
                    full_text:lower():match("season%s*3") or
                    full_text:lower():match("part%s*3")) then
@@ -3618,10 +3767,32 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
             end
             ::skip_media::
         end
-        -- Calculate which season this episode belongs to
+
+        -- STEP B: If flat text only found S1 (or nothing), fill gaps with SEQUEL walk
+        -- This handles the case where S2/S3 weren't in the search results at all
+        local needs_graph_fill = (seasons[1] and not seasons[2])  -- have S1 but missing S2+
+                              or (not seasons[1])                  -- have nothing at all
+        if needs_graph_fill then
+            debug_log("  Cumulative: flat text incomplete, filling from SEQUEL chain...")
+            local s1 = seasons[1] and seasons[1].media or find_s1_candidate()
+            if s1 then
+                local chain = build_sequel_chain(s1)
+                -- Merge chain into seasons{}, don't overwrite anything flat text already found
+                for idx, entry in pairs(chain) do
+                    if not seasons[idx] and entry.episodes then
+                        seasons[idx] = {media = entry, eps = entry.episodes, name = entry.title.romaji or "?"}
+                        debug_log(string.format("  Filled seasons[%d] from chain: %s (%d eps)", 
+                            idx, entry.title.romaji or "?", entry.episodes))
+                    end
+                end
+            end
+        end
+
+        -- Now walk seasons{} to find which season this cumulative episode lands in
         local cumulative = 0
         local found_match = false
-        for season_idx = 1, 3 do
+        -- Walk up to season 10 (covers anything realistic)
+        for season_idx = 1, 10 do
             if seasons[season_idx] then
                 local season_eps = seasons[season_idx].eps
                 debug_log(string.format("  Season %d: %s (%d eps, range: %d-%d)", 
@@ -3634,11 +3805,15 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
                     match_method = "cumulative"
                     match_confidence = "medium"
                     found_match = true
-                    debug_log(string.format("MATCH: Cumulative - Ep %d -> S%dE%d of '%s' (MEDIUM CONFIDENCE)", 
+                    debug_log(string.format("MATCH: Cumulative - Ep %d -> S%dE%d of '%s' (MEDIUM)", 
                         episode_num, season_idx, actual_episode, selected.title.romaji))
                     break
                 end
                 cumulative = cumulative + season_eps
+            else
+                -- Gap in the chain — stop here, can't reliably continue
+                debug_log(string.format("  Season %d: missing, stopping cumulative walk", season_idx))
+                break
             end
         end
         if found_match then
@@ -3647,7 +3822,10 @@ local function smart_match_anilist(results, parsed, episode_num, season_num, fil
             debug_log("WARNING: Cumulative calculation failed - episode exceeds all known seasons", true)
         end
     end
-    -- FALLBACK: Use default (first result)
+
+    ---------------------------------------------------------------------------
+    -- FALLBACK: Use default (first result), unchanged
+    ---------------------------------------------------------------------------
     if season_num then
         actual_season = season_num
     end
@@ -3747,37 +3925,69 @@ search_anilist = function(is_auto)
     local data
     local cached = ANILIST_CACHE[cache_key]
     
+    -- CACHE CHECK: Reject old cached entries that don't have relations data
+    -- This handles the migration from the old query (no relations) to the new one
     if cached and (os.time() - (cached.timestamp or 0) < 86400) then
-        debug_log("Search: Using cached results for '" .. search_title .. "'")
-        data = { Page = { media = cached.results } }
-    else
+        -- Validate that cached data actually HAS relations fields
+        local has_relations = false
+        if cached.results and #cached.results > 0 then
+            -- Check if the first result has the relations field at all
+            -- (even if edges is empty, the key existing means it was fetched with the new query)
+            if cached.results[1].relations ~= nil then
+                has_relations = true
+            end
+        end
+
+        if has_relations then
+            debug_log("Search: Using cached results for '" .. search_title .. "' (has relations)")
+            data = { Page = { media = cached.results } }
+        else
+            debug_log("Search: Cache hit but missing relations data - re-fetching from API")
+            cached = nil  -- Force a fresh fetch below
+        end
+    end
+
+    if not data then
         debug_log("Search: Requesting AniList API for '" .. search_title .. "'")
+        -- UPDATED QUERY: includes relations with SEQUEL/PREQUEL edges
+        -- This is the critical addition that lets us walk the season chain
+        -- e.g. Frieren S1 -> SEQUEL -> Frieren Part 2 (S2)
         local query = [[ 
         query ($search: String) { 
             Page (perPage: 15) { 
                 media (search: $search, type: ANIME) { 
                     id 
-                    title { romaji english } 
-                    synonyms status episodes format 
+                    title { romaji english native } 
+                    synonyms status episodes format seasonYear
+                    relations {
+                        edges {
+                            relationType
+                            node {
+                                id
+                                title { romaji english }
+                                synonyms episodes format status seasonYear
+                            }
+                        }
+                    }
                 } 
             } 
         } ]]
         
         data = make_anilist_request(query, {search = search_title})
         
-        -- Fallbacks
-        if not (data and data.Page.media and #data.Page.media > 0) then
+        -- Fallbacks: try alternate title forms if initial search returned nothing
+        if not (data and data.Page and data.Page.media and #data.Page.media > 0) then
             debug_log("Search: No initial results, trying fallbacks...")
             local fallbacks = { 
                 parsed.title, 
-                search_title:match("^(.-)%s*%-%s*.+$"), 
-                search_title:match("^(%S+)") 
+                search_title:match("^(.-)%s*%-%s*.+$"),  -- everything before first " - "
+                search_title:match("^(%S+)")              -- first word only
             }
             for _, alt in ipairs(fallbacks) do
                 if alt and #alt > 2 and alt ~= search_title then
                     debug_log("Search: Trying fallback: " .. alt)
                     data = make_anilist_request(query, {search = alt})
-                    if data and data.Page.media and #data.Page.media > 0 then 
+                    if data and data.Page and data.Page.media and #data.Page.media > 0 then 
                         debug_log("Search: Fallback success with: " .. alt)
                         break 
                     end
@@ -3785,7 +3995,8 @@ search_anilist = function(is_auto)
             end
         end
 
-        if data and data.Page.media and #data.Page.media > 0 then
+        -- Cache the fresh results (now includes relations)
+        if data and data.Page and data.Page.media and #data.Page.media > 0 then
             ANILIST_CACHE[cache_key] = { results = data.Page.media, timestamp = os.time() }
             if not STANDALONE_MODE then save_ANILIST_CACHE() end
         else
@@ -3794,7 +4005,7 @@ search_anilist = function(is_auto)
     end
 
     -- 2. Process Results
-    if data and data.Page.media and #data.Page.media > 0 then
+    if data and data.Page and data.Page.media and #data.Page.media > 0 then
         local results = data.Page.media
         debug_log(string.format("Search: Processing %d potential matches...", #results))
         
@@ -3815,6 +4026,9 @@ search_anilist = function(is_auto)
                 total_episodes = selected.episodes, 
                 anilist_entry = selected
             }
+            -- Store seasons data at menu_state level so the subtitle browser
+            -- can access it later for cumulative episode jumping
+            menu_state.seasons_data = seasons
 
             conditional_osd(string.format("Match: %s\nS%d E%d | %s", 
                 selected.title.romaji, actual_sea, actual_ep, selected.format or "TV"), 5, is_auto)
@@ -3825,6 +4039,7 @@ search_anilist = function(is_auto)
             if jimaku_entry then
                 debug_log("Jimaku: Found entry " .. jimaku_entry.id .. ". Starting download...")
                 menu_state.jimaku_id = jimaku_entry.id
+                menu_state.jimaku_entry = jimaku_entry
                 download_subtitle_smart(jimaku_entry.id, actual_ep, actual_sea, seasons, selected, is_auto)
             else
                 debug_log("Jimaku: No entry found on Jimaku.cc, checking local cache...")
