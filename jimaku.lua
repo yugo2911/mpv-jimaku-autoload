@@ -63,34 +63,87 @@ ANILIST_CACHE = {}
 JIMAKU_CACHE = {}
 -- DEBUG LOGGING FUNCTION - Enhanced with cache-specific logging
 debug_log = function(message, is_error)
-    if LOG_ONLY_ERRORS and not is_error then return end
+    if LOG_ONLY_ERRORS and not is_error then 
+        return 
+    end
+    
     local timestamp = os.date("%Y-%m-%d %H:%M:%S")
     local log_msg = string.format("[%s] %s\n", timestamp, message)
-    -- 1. Always print to terminal
-    print("Jimaku: " .. message)
-    -- 2. Handle File I/O safely
+    
+    -- 1. Always print to terminal with pcall
+    local ok_print, print_err = pcall(print, "Jimaku: " .. message)
+    if not ok_print then
+        -- If print fails, we can't do much, but at least don't crash
+        -- Could write to a fallback location if needed
+    end
+    
+    -- 2. Handle File I/O safely with pcall
     if type(LOG_FILE) == "string" then
-        local f = io.open(LOG_FILE, "a")
-        if f then
-            f:write(log_msg)
-            f:close()
+        -- Try to open and write to the log file with pcall
+        local f_open_ok, f_or_err = pcall(io.open, LOG_FILE, "a")
+        if f_open_ok and f_or_err then
+            local f = f_or_err
+            -- Write with pcall
+            local write_ok, write_err = pcall(function()
+                f:write(log_msg)
+                f:close()
+            end)
+            
+            if not write_ok then
+                -- Write failed, try to close anyway
+                local close_ok, close_err = pcall(f.close, f)
+                -- Log the write error if we can
+                local err_print_ok, _ = pcall(print, "Jimaku ERROR: Cannot write to log: " .. tostring(write_err))
+            end
         else
-            -- If we can't open the file, try to create it
+            -- Failed to open file, try to create directory and file
             local dir = LOG_FILE:match("^(.*[/\\])")
             if dir then
-                os.execute("mkdir -p " .. dir)
-                f = io.open(LOG_FILE, "a")
-                if f then
-                    f:write(log_msg)
-                    f:close()
+                -- Create directory with pcall
+                local mkdir_ok, mkdir_err = pcall(os.execute, "mkdir -p " .. dir)
+                if mkdir_ok then
+                    -- Try to open again after creating directory
+                    local retry_open_ok, retry_f = pcall(io.open, LOG_FILE, "a")
+                    if retry_open_ok and retry_f then
+                        local retry_write_ok, retry_write_err = pcall(function()
+                            retry_f:write(log_msg)
+                            retry_f:close()
+                        end)
+                        
+                        if not retry_write_ok then
+                            local close_ok, close_err = pcall(retry_f.close, retry_f)
+                            local err_print_ok, _ = pcall(print, 
+                                "Jimaku ERROR: Cannot write to created log: " .. tostring(retry_write_err))
+                        end
+                    else
+                        -- Failed to open even after creating directory
+                        local err_print_ok, _ = pcall(print, 
+                            "Jimaku ERROR: Cannot create log file at " .. LOG_FILE)
+                    end
                 else
-                    print("Jimaku ERROR: Cannot create log file at " .. LOG_FILE)
+                    -- Failed to create directory
+                    local err_print_ok, _ = pcall(print, 
+                        "Jimaku ERROR: Cannot create log directory: " .. tostring(mkdir_err))
                 end
+            else
+                -- No directory in path (current directory)
+                local err_print_ok, _ = pcall(print, 
+                    "Jimaku ERROR: Cannot open log file at " .. LOG_FILE)
             end
         end
     elseif LOG_FILE_HANDLE then
-        LOG_FILE_HANDLE:write(log_msg)
-        LOG_FILE_HANDLE:flush()
+        -- Handle pre-opened file handle with pcall
+        local write_ok, write_err = pcall(LOG_FILE_HANDLE.write, LOG_FILE_HANDLE, log_msg)
+        if write_ok then
+            local flush_ok, flush_err = pcall(LOG_FILE_HANDLE.flush, LOG_FILE_HANDLE)
+            if not flush_ok then
+                local err_print_ok, _ = pcall(print, 
+                    "Jimaku ERROR: Cannot flush log: " .. tostring(flush_err))
+            end
+        else
+            local err_print_ok, _ = pcall(print, 
+                "Jimaku ERROR: Cannot write to log handle: " .. tostring(write_err))
+        end
     end
 end
 
