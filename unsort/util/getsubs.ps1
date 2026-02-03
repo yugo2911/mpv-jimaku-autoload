@@ -1,2 +1,0 @@
-# Get all subtitle file names as i asume subtitle files are same named on jimaku so its fine to use kitsunekko
-Get-ChildItem -Recurse -File | Where-Object { $_.Extension -in '.ass','.srt' } | ForEach-Object { $_.Name | Out-File -Encoding UTF8 kitsunekko_sub_filenames.log -Append }
