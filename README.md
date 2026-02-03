@@ -52,4 +52,4 @@ Alt + A to open up the menu, [theme is ModernZ](https://github.com/Samillion/Mod
     └── Browse, search, manage subtitles
 ```
 > [!NOTE]
-> Some GUI options are WIP
+> Script works but some GUI options are still WIP
