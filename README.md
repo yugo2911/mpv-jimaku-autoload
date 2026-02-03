@@ -1,3 +1,5 @@
+This script automatically loads subs from Jimaku.
+
 **Installation:**
 1. **Place script:** `jimaku.lua` → `~/.config/mpv/scripts/`
 2. **Add API key:** Create `~/.config/mpv/script-opts/jimaku.conf` with:
