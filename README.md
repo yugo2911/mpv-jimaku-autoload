@@ -18,7 +18,7 @@ LOG_FILE=no
 * **Windows:** `%APPDATA%\mpv\scripts\`
 * **Linux/macOS:** `~/.config/mpv/scripts/`
 
-Alt + A to open up the menu, [theme is ModernZ](https://github.com/Samillion/ModernZ)
+Alt + A to open up the menu, [(theme is ModernZ)](https://github.com/Samillion/ModernZ)
 <img width="1024" height="576" alt="image" src="https://github.com/user-attachments/assets/4b411f18-5432-432a-9b29-f611f3da23dc" />
 
 ```
