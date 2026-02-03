@@ -94,9 +94,9 @@ debug_log = function(message, is_error)
     end
 end
 
-----
+-------------------------------------------------------------------------------
 -- Async State
-----
+-------------------------------------------------------------------------------
 local async_state = { 
     pending_requests = {}, 
     request_id_counter = 0, 
