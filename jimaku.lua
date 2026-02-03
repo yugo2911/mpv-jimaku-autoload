@@ -310,11 +310,10 @@ save_preferred_groups = function()
 end
 -- TODO INDEX FILE LOCATIONS INSTEAD OF DUMB SCAN ON BOOT
 -------------------------------------------------------------------------------
--- INDEXING UTILITIES (O(n) Walk / O(1) Boot)
+-- INDEXING UTILITIES (With Enhanced Debugging)
 -------------------------------------------------------------------------------
 local INDEX_FILE = CONFIG_DIR .. "/cache/sub_index.json"
 
--- Helper function to count table entries properly
 local function count_table_entries(tbl)
     if not tbl or type(tbl) ~= "table" then return 0 end
     local count = 0
@@ -322,38 +321,76 @@ local function count_table_entries(tbl)
     return count
 end
 
--- Recursive folder walk (O(n))
 local function walk_directory(path)
+    debug_log("Walking directory: " .. tostring(path))
     local files = {}
+    
     local entries = utils.readdir(path, "files")
     local dirs = utils.readdir(path, "dirs")
+    
+    if not entries and not dirs then
+        debug_log("WARNING: readdir returned nil for " .. tostring(path) .. ". Check permissions/path.")
+    end
+
     for _, file in ipairs(entries or {}) do
         if file:match("%.ass$") or file:match("%.srt$") then
+            debug_log("Found sub: " .. file)
             table.insert(files, path .. "/" .. file)
         end
     end
+    
     for _, dir in ipairs(dirs or {}) do
         if dir ~= "." and dir ~= ".." then
-            local sub_files = walk_directory(path .. "/" .. dir)
-            for _, f in ipairs(sub_files) do table.insert(files, f) end
+            local sub_path = path .. "/" .. dir
+            local sub_files = walk_directory(sub_path)
+            for _, f in ipairs(sub_files) do 
+                table.insert(files, f) 
+            end
         end
     end
     return files
 end
--- Refresh the flat index file
+
 update_sub_index = function()
-    debug_log("Refreshing subtitle index...")
+    if not SUBTITLE_CACHE_DIR then
+        debug_log("ERROR: SUBTITLE_CACHE_DIR is not defined!")
+        return {}
+    end
+
+    debug_log("Refreshing subtitle index at: " .. SUBTITLE_CACHE_DIR)
     local all_subs = walk_directory(SUBTITLE_CACHE_DIR)
-    save_persistent_cache(INDEX_FILE, { last_updated = os.time(), files = all_subs })
+    
+    local entry_count = count_table_entries(all_subs)
+    debug_log("Indexing complete. Found " .. entry_count .. " files.")
+
+    local success = save_persistent_cache(INDEX_FILE, { 
+        last_updated = os.time(), 
+        files = all_subs 
+    })
+    
+    if not success then
+        debug_log("ERROR: Failed to write index file to " .. INDEX_FILE)
+    end
+
     return all_subs
 end
--- Fast retrieval (O(1) Disk access)
+
 get_indexed_subs = function(auto_create)
+    debug_log("Attempting to load index: " .. INDEX_FILE)
     local data = load_persistent_cache(INDEX_FILE)
-    if (not data or not data.files) and auto_create then 
-        return update_sub_index() 
+    
+    if (not data or not data.files or count_table_entries(data.files) == 0) then
+        if auto_create then 
+            debug_log("Index empty or missing. Triggering auto_create...")
+            return update_sub_index() 
+        else
+            debug_log("Index empty, auto_create disabled.")
+            return {}
+        end
     end
-    return data and data.files or {}
+    
+    debug_log("Successfully loaded " .. count_table_entries(data.files) .. " files from disk.")
+    return data.files
 end
 -------------------------------------------------------------------------------
 -- MENU SYSTEM STATE
