@@ -286,6 +286,7 @@ local function load_preferred_groups()
     -- Configure in what order to subtitiles will get loaded u can skip groups by setting enabled = false
     debug_log("Using default preferred groups")
     return {
+        {name = "Haruhana", enabled = true},
         {name = "Nekomoe kissaten", enabled = true},
         {name = "LoliHouse", enabled = true},
         {name = "Retimed", enabled = true},
@@ -2457,6 +2458,7 @@ local function subtitle_matches_title(subtitle_filename, title_variations)
     return false, nil
 end
 -- ENHANCED: Intelligent episode matching with AniList cross-verification
+-- ENHANCED: Intelligent episode matching with AniList cross-verification
 local function match_episodes_intelligent(files, target_episode, target_season, seasons_data, anilist_entry)
     if not files or #files == 0 then
         return {}
@@ -2478,6 +2480,90 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     local target_cumulative = calculate_jimaku_episode(target_season or anilist_season, target_episode, seasons_data)
     debug_log(string.format("Target: S%d E%d = Cumulative Episode %d", 
         anilist_season, target_episode, target_cumulative))
+
+    ---------------------------------------------------------------------------
+    -- HELPER: Extract the group tag from [BracketedName] at the start of filename
+    -- Returns the content inside the first [...], lowercased, or nil
+    ---------------------------------------------------------------------------
+    local function extract_bracket_group(filename)
+        local tag = filename:match("^%[([^%]]+)%]")
+        return tag and tag:lower() or nil
+    end
+
+    ---------------------------------------------------------------------------
+    -- HELPER: Calculate priority score for a file against preferred groups
+    -- 
+    -- Strategy: scan ALL enabled groups, keep track of the BEST match.
+    -- "Best" = the group with the smallest index (highest user priority).
+    --
+    -- Two-pass approach per file:
+    --   Pass 1: check ONLY against the extracted [BracketTag] at the start.
+    --           This is the actual release group. It's specific and intentional.
+    --   Pass 2: if Pass 1 found nothing, fall back to searching the full filename.
+    --           This catches source tags like "Amazon" or "Netflix" that appear
+    --           mid-filename (e.g. "葬送のフリーレン.WEBRip.Amazon.ja.srt")
+    --
+    -- Why two passes: "WEBRip" appears in nearly every filename as a format tag.
+    -- If we search the full filename first, WEBRip (index 4) will match before
+    -- Amazon (index 7) on a file like "Title.WEBRip.Amazon.srt", even though
+    -- "Amazon" is the meaningful source identifier.  The bracket tag "[Amazon]"
+    -- or a dedicated pass avoids that.  Pass 2 still uses full-filename search
+    -- but it only runs when the bracket tag matched nothing, which is correct:
+    -- if there IS a bracket group, that IS the group, period.
+    ---------------------------------------------------------------------------
+    local function calculate_priority_score(filename)
+        if not JIMAKU_PREFERRED_GROUPS or #JIMAKU_PREFERRED_GROUPS == 0 then
+            return 0, nil
+        end
+
+        local bracket_tag = extract_bracket_group(filename)
+        local file_lower   = filename:lower()
+        local best_index   = nil   -- smallest index wins (= highest user priority)
+        local best_name    = nil
+
+        -- Pass 1: bracket tag only (most specific)
+        if bracket_tag then
+            for i, pref_group in ipairs(JIMAKU_PREFERRED_GROUPS) do
+                if pref_group.enabled then
+                    -- Use plain find so special pattern chars in group names don't break
+                    if bracket_tag:find(pref_group.name:lower(), 1, true) then
+                        if not best_index or i < best_index then
+                            best_index = i
+                            best_name  = pref_group.name
+                            -- Don't break — keep scanning for a higher-priority group
+                            -- that also appears in the bracket tag
+                            -- e.g. tag is "nekomoe kissaten&loli house"
+                            -- and both "Nekomoe kissaten" (1) and "LoliHouse" (2) match
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Pass 2: full filename (only if bracket gave us nothing)
+        if not best_index then
+            for i, pref_group in ipairs(JIMAKU_PREFERRED_GROUPS) do
+                if pref_group.enabled then
+                    if file_lower:find(pref_group.name:lower(), 1, true) then
+                        if not best_index or i < best_index then
+                            best_index = i
+                            best_name  = pref_group.name
+                        end
+                    end
+                end
+            end
+        end
+
+        if best_index then
+            -- Score: invert the index so index 1 gets the highest number
+            local score = (#JIMAKU_PREFERRED_GROUPS - best_index + 1) * 10
+            debug_log(string.format("    Group match: '%s' (index %d, score %d) for %s",
+                best_name, best_index, score, filename:sub(1, 60)))
+            return score, best_name
+        end
+        return 0, nil
+    end
+
     -- Parse all filenames and build episode map
     for _, file in ipairs(files) do
         local jimaku_season, jimaku_episode = parse_jimaku_filename(file.name)
@@ -2491,25 +2577,19 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             if JIMAKU_HIDE_SIGNS_ONLY then
                 local lower_name = file.name:lower()
                 if lower_name:match("signs") or lower_name:match("songs") or file.size < 5000 then
-                    -- Skip if it's very likely just signs (usually < 5KB)
                     goto next_file
                 end
             end
-            -- Filter out disabled preferred groups
+            -- Filter out DISABLED preferred groups (skip the file entirely)
+            -- This is separate from scoring — disabled = excluded, not low priority
             for _, pref_group in ipairs(JIMAKU_PREFERRED_GROUPS) do
-                if not pref_group.enabled and file.name:lower():match(pref_group.name:lower()) then
+                if not pref_group.enabled and file.name:lower():find(pref_group.name:lower(), 1, true) then
                     debug_log(string.format("Skipping subtitle due to disabled group '%s': %s", pref_group.name, file.name))
                     goto next_file
                 end
             end
-            -- Calculate priority score based on preferred groups
-            for i, pref_group in ipairs(JIMAKU_PREFERRED_GROUPS) do
-                if pref_group.enabled and file.name:lower():match(pref_group.name:lower()) then
-                    -- Priority boost: Higher in list (smaller index) = higher boost
-                    priority_score = (#JIMAKU_PREFERRED_GROUPS - i + 1) * 2
-                    break
-                end
-            end
+            -- Calculate priority score using the new two-pass helper
+            priority_score = calculate_priority_score(file.name)
             -- Convert to number if it's a string
             local ep_num = tonumber(jimaku_episode) or 0
             -- VERIFICATION STEP 1: Check if subtitle filename matches any title variation
@@ -2519,27 +2599,19 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             end
             -- CASE 1: Jimaku file has explicit season marker (S02E14, S03E48)
             if jimaku_season then
-                -- Try multiple interpretations of season-marked files
-                -- Interpretation 1A: Standard season numbering (S2E03 = Season 2, Episode 3)
                 if jimaku_season == anilist_season and ep_num == target_episode then
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "direct_season_match"
                     confidence = title_match and "high" or "medium"
                 end
-                -- Interpretation 1B: Netflix-style absolute numbering in season format
-                -- (S02E14 actually means "Episode 14 overall", not "Season 2, Episode 14")
                 if not is_match and ep_num == target_cumulative then
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "netflix_absolute_in_season_format"
-                    -- Netflix absolute numbering is reliable when it matches cumulative exactly
                     confidence = title_match and "high" or "medium-high"
                 end
-                -- Interpretation 1C: Season marker but episode is cumulative from that season's start
-                -- (S02E03 means 3rd episode of Season 2, where S2 started at overall episode 14)
                 if not is_match and jimaku_season == anilist_season then
-                    -- Calculate what cumulative episode this would be
                     local file_cumulative = calculate_jimaku_episode(jimaku_season, ep_num, seasons_data)
                     if file_cumulative == target_cumulative then
                         is_match = true
@@ -2548,24 +2620,20 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                         confidence = title_match and "high" or "medium"
                     end
                 end
-            -- CASE 2: Jimaku file has NO season marker - could be cumulative OR within-season
+            -- CASE 2: Jimaku file has NO season marker
             else
-                -- Interpretation 2A: It's a cumulative episode number (E14 = overall episode 14)
                 if ep_num == target_cumulative then
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "cumulative_match"
                     confidence = title_match and "high" or "medium"
                 end
-                -- Interpretation 2B: It's the within-season episode (E03 = 3rd episode of current season)
                 if not is_match and ep_num == target_episode then
                     is_match = true
                     anilist_episode = target_episode
                     match_type = "direct_episode_match"
                     confidence = title_match and "medium-high" or "low-medium"
                 end
-                -- Interpretation 2C: Reverse cumulative conversion
-                -- (File says E14, but maybe it means something else in context)
                 if not is_match then
                     local converted_ep = convert_jimaku_to_anilist_episode(ep_num, anilist_season, seasons_data)
                     if converted_ep == target_episode then
@@ -2576,8 +2644,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                     end
                 end
             end
-            -- CASE 3: Japanese absolute episode number (第222話) matches target cumulative
-            -- Check directly in filename since parse_jimaku_filename returns early on SxxExx match
+            -- CASE 3: Japanese absolute episode number (第222話)
             if not is_match then
                 local japanese_ep = file.name:match("第(%d+)[話回]")
                 if japanese_ep then
@@ -2593,16 +2660,12 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             -- VERIFICATION STEP 2: Adjust confidence based on AniList metadata
             if is_match then
                 if jimaku_season then
-                    -- If it has a season marker, it should match AniList season
                     if jimaku_season == anilist_season then
-                        -- Boost confidence
                         if confidence == "medium" then confidence = "high" end
                     else
-                        -- Lower confidence if season mismatch
                         if confidence == "high" then confidence = "medium" end
                     end
                 end
-                -- Check if episode number is reasonable
                 if ep_num > total_episodes * 2 then
                     confidence = "low"
                 end
@@ -2633,7 +2696,16 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
         end
         ::next_file::
     end
-    -- Sort matches by confidence (high > medium-high > medium > low-medium > low)
+
+    ---------------------------------------------------------------------------
+    -- SORT: priority_score is PRIMARY, confidence is TIEBREAKER
+    --
+    -- Why: preferred groups are an explicit user preference. If the user put
+    -- "Nekomoe kissaten" at rank 1, that file should come first even if another
+    -- file has a slightly higher confidence tier.  Confidence only breaks ties
+    -- between files that have the same priority score (e.g. two files from the
+    -- same group, or two files that both matched no group).
+    ---------------------------------------------------------------------------
     local confidence_order = {
         high = 5,
         ["medium-high"] = 4,
@@ -2642,10 +2714,16 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
         low = 1
     }
     table.sort(matches, function(a, b)
-        local a_score = (confidence_order[a.confidence] or 0) * 100 + a.priority_score
-        local b_score = (confidence_order[b.confidence] or 0) * 100 + b.priority_score
-        return a_score > b_score
+        -- Primary: higher priority_score first
+        if a.priority_score ~= b.priority_score then
+            return a.priority_score > b.priority_score
+        end
+        -- Tiebreaker: higher confidence first
+        local a_conf = confidence_order[a.confidence] or 0
+        local b_conf = confidence_order[b.confidence] or 0
+        return a_conf > b_conf
     end)
+
     -- If no matches found, show what we parsed for debugging
     if #matches == 0 then
         debug_log(string.format("No matches found for S%d E%d (cumulative: %d). Parsed episodes:", 
@@ -2665,9 +2743,9 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
             debug_log(string.format("  ... and %d more files", #all_parsed - 10))
         end
     else
-        debug_log(string.format("Found %d matching file(s), sorted by confidence:", #matches))
+        debug_log(string.format("Found %d matching file(s), sorted by priority then confidence:", #matches))
         for i, m in ipairs(matches) do
-            debug_log(string.format("  [%d] %s: %s", i, m.confidence, m.file.name:sub(1, 70)))
+            debug_log(string.format("  [%d] P=%d | %s: %s", i, m.priority_score, m.confidence, m.file.name:sub(1, 70)))
         end
     end
     -- Return just the files (extract from match objects)
