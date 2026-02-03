@@ -3975,9 +3975,6 @@ end
 -------------------------------------------------------------------------------
 -- ANILIST SEARCH & SYNC
 -------------------------------------------------------------------------------
--------------------------------------------------------------------------------
--- ANILIST SEARCH & SYNC (WITH LOGGING)
--------------------------------------------------------------------------------
 search_anilist = function(is_auto)
     local title_source = mp.get_property("media-title") or mp.get_property("filename")
     debug_log("Search: Starting AniList sync for: " .. tostring(title_source))
