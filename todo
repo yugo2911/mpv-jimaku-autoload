@@ -1,4 +1,13 @@
 
+insta quiting on saving groups
+
+too many osd messages updates, they update so quickly there is no point, we just see loaded sucefully message 
+
+validate if our cross refercing is good enough..
+
+scoring for prefred groups is still not perfect
+in prefred groups page cannot go up?
+
 tier1
 make it read local files even if anilist and jimaku fail
 we have to check somewhere to skip exactly same loaded subs
@@ -10,4 +19,4 @@ brokeb subtitle browser jump to current episode broken again......
 browse all files(view all files) >, browse all files(Retrieved 1253 total subtitle files)
 makes sense to get local subs first if user has them from kitsunekko etc, if kittsuneko-mirror is used it lags mpv somtimes due ammount of files
 
-
+btw cache maniging is so aids cuz u gotta validate the local data aswell xD
