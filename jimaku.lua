@@ -3846,6 +3846,56 @@ search_anilist = function(is_auto)
         end
     end
 end
+
+-- Handle adding new groups from console
+mp.register_script_message("jimaku-set-groups", function(input)
+    if not input or input:match("^%s*$") then
+        mp.osd_message("No groups provided", 3)
+        return
+    end
+    
+    debug_log("Adding new groups from console: " .. input)
+    
+    -- Split by comma and clean up
+    local added_count = 0
+    for group_name in input:gmatch("([^,]+)") do
+        group_name = group_name:match("^%s*(.-)%s*$")  -- Trim spaces
+        if group_name and group_name ~= "" then
+            -- Check if group already exists
+            local exists = false
+            for _, group in ipairs(JIMAKU_PREFERRED_GROUPS) do
+                if group.name:lower() == group_name:lower() then
+                    exists = true
+                    break
+                end
+            end
+            
+            if not exists then
+                table.insert(JIMAKU_PREFERRED_GROUPS, {
+                    name = group_name,
+                    enabled = true
+                })
+                added_count = added_count + 1
+                debug_log("Added group: " .. group_name)
+            else
+                debug_log("Group already exists: " .. group_name)
+            end
+        end
+    end
+    
+    if added_count > 0 then
+        save_preferred_groups()
+        mp.osd_message(string.format("Added %d new group(s)", added_count), 3)
+        
+        -- Refresh the menu if it's currently open
+        if menu_state.active and menu_state.stack[#menu_state.stack].title == "Release Group Priority" then
+            pop_menu()
+            show_preferred_groups_menu()
+        end
+    else
+        mp.osd_message("No new groups added (may already exist)", 3)
+    end
+end)
 -------------------------------------------------------------------------------
 -- EVENTS & INIT
 -------------------------------------------------------------------------------
