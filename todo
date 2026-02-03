@@ -1,6 +1,6 @@
 
 insta quiting on saving groups
-
+offline fails to find any locals subs, even with anilist cache, we gotta detect handle anilist and jimaku true/false better
 too many osd messages updates, they update so quickly there is no point, we just see loaded sucefully message 
 
 validate if our cross refercing is good enough..
