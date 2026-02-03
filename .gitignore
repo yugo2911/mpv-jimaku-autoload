@@ -1,1 +1,6 @@
+# Data and Temporary Folders
+data/
+unsort/
+
+# Log Files
 *.log
