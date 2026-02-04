@@ -17,6 +17,7 @@ LOG_FILE=no
 ```
 **Get API key:** [jimaku.cc](https://jimaku.cc)
 
+MPV default path location
 * **Windows:** `%APPDATA%\mpv\scripts\`
 * **Linux/macOS:** `~/.config/mpv/scripts/`
 
