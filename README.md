@@ -1,8 +1,8 @@
 This script automatically loads subs from Jimaku.
 
 **Installation:**
-1. **Place script:** `jimaku.lua` → `~/.config/mpv/scripts/`
-2. **Add API key:** Create `~/.config/mpv/script-opts/jimaku.conf` with:
+1. **Place script:** `jimaku.lua` → `%APPDATA%\mpv\scripts\`
+2. **Add API key:** Create `%APPDATA%\mpv\script-opts\jimaku.conf` with:
 ```ini
 jimaku_api_key=YOUR_API_KEY_HERE
 SUBTITLE_CACHE_DIR=./subtitle-cache
@@ -16,8 +16,8 @@ INITIAL_OSD_MESSAGES=yes
 LOG_FILE=no
 ```
 **Get API key:** [jimaku.cc](https://jimaku.cc)
-
-MPV default path location
+>Note
+MPV default path location, if there is no folders just create them and place the files
 * **Windows:** `%APPDATA%\mpv\scripts\`
 * **Linux/macOS:** `~/.config/mpv/scripts/`
 
