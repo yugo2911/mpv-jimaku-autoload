@@ -55,6 +55,8 @@ JIMAKU_FONT_SIZE     = script_opts.JIMAKU_FONT_SIZE
 INITIAL_OSD_MESSAGES = script_opts.INITIAL_OSD_MESSAGES
 USE_ANILIST_API      = script_opts.USE_ANILIST_API
 USE_JIMAKU_API       = script_opts.USE_JIMAKU_API
+-- Standardized error message for API key issues
+API_KEY_ERROR_MSG = "Error: Jimaku API key not set"
 -- Will be loaded from cache during initialization
 JIMAKU_PREFERRED_GROUPS = nil
 -- Runtime Caches
@@ -548,7 +550,7 @@ end
 -- Download a specific subtitle file selected from browser
 download_selected_subtitle_action = function(file)
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
-        mp.osd_message("Error: Jimaku API key not set", 3)
+        mp.osd_message(API_KEY_ERROR_MSG, 3)
         return
     end
 
@@ -811,8 +813,11 @@ show_subtitle_browser = function()
     -- Fetch files if not cached
     if not menu_state.browser_files then
         mp.osd_message("Fetching subtitle list...", 30)
-        local files = fetch_all_episode_files(jimaku_id)
-        if files then
+        local files, error_code = fetch_all_episode_files(jimaku_id)
+        if error_code == "MISSING_KEY" then
+            mp.osd_message(API_KEY_ERROR_MSG, 3)
+            return
+        elseif files then
             logical_sort_files(files)
         end
         menu_state.browser_files = files
@@ -1038,7 +1043,7 @@ select_anilist_result = function(selected)
     mp.osd_message("Selected: " .. title_text, 3)
     
     -- Trigger subtitle search O(1)
-    local jimaku_entry = search_jimaku_subtitles(selected.id)
+    local jimaku_entry, error_code = search_jimaku_subtitles(selected.id)
     if jimaku_entry then
         menu_state.jimaku_id = jimaku_entry.id
         menu_state.jimaku_entry = jimaku_entry
@@ -1051,6 +1056,8 @@ select_anilist_result = function(selected)
             seasons,
             selected
         )
+    elseif error_code == "MISSING_KEY" then
+        mp.osd_message(API_KEY_ERROR_MSG, 3)
     else
         mp.osd_message("No Jimaku entry found for this show.", 3)
     end
@@ -2340,6 +2347,11 @@ local function search_jimaku_subtitles(anilist_id)
 end
 -- Fetch ALL subtitle files for an entry (no episode filter)
 fetch_all_episode_files = function(entry_id)
+    -- API key validation
+    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
+        return nil, "MISSING_KEY"
+    end
+    
     -- Check cache first
     if EPISODE_CACHE[entry_id] then
         local cache_age = os.time() - EPISODE_CACHE[entry_id].timestamp
@@ -2757,8 +2769,18 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
 end
 -- Smart subtitle download with intelligent matching
 local function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anilist_entry, is_auto)
+    -- API key validation
+    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
+        conditional_osd(API_KEY_ERROR_MSG, 3, is_auto)
+        return false
+    end
+    
     -- Fetch all files for this entry
-    local all_files = fetch_all_episode_files(entry_id)
+    local all_files, error_code = fetch_all_episode_files(entry_id)
+    if error_code == "MISSING_KEY" then
+        conditional_osd(API_KEY_ERROR_MSG, 3, is_auto)
+        return false
+    end
     if not all_files or #all_files == 0 then
         debug_log("No subtitle files available for this entry", false)
         return false
@@ -3417,7 +3439,7 @@ end
 mp.register_script_message("jimaku-search", function(query)
     if not query or query == "" then return end
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then 
-        mp.osd_message("Set API key first", 3) 
+        mp.osd_message(API_KEY_ERROR_MSG, 3) 
         return 
     end
     mp.osd_message("Searching: " .. query, 3)
@@ -4113,12 +4135,14 @@ search_anilist = function(is_auto)
 
             -- 3. Get Subtitles
             debug_log("Jimaku: Searching subtitles for AniList ID " .. selected.id)
-            local jimaku_entry = search_jimaku_subtitles(selected.id)
+            local jimaku_entry, error_code = search_jimaku_subtitles(selected.id)
             if jimaku_entry then
                 debug_log("Jimaku: Found entry " .. jimaku_entry.id .. ". Starting download...")
                 menu_state.jimaku_id = jimaku_entry.id
                 menu_state.jimaku_entry = jimaku_entry
                 download_subtitle_smart(jimaku_entry.id, actual_ep, actual_sea, seasons, selected, is_auto)
+            elseif error_code == "MISSING_KEY" then
+                conditional_osd(API_KEY_ERROR_MSG, 3, is_auto)
             else
                 debug_log("Jimaku: No entry found on Jimaku.cc, checking local cache...")
                 if not search_local_subtitle_cache(parsed, is_auto, selected.id) then
