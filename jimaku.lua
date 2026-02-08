@@ -3392,7 +3392,7 @@ end
 -- New helper to track currently loaded subtitles from track-list
 update_loaded_subs_list = function()
     -- Get files from JSON index (O(1) Disk) instead of re-scanning folders
-    local indexed_files = get_indexed_subs()
+    local indexed_files = get_indexed_subs(true)
     local count = 0
     -- Clear current list
     menu_state.loaded_subs = {}
