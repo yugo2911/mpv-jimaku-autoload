@@ -1,18 +1,17 @@
 **Installation:**
 1. **Place script:** `jimaku.lua` → `~/.config/mpv/scripts/`
 2. **Add API key:** Create `~/.config/mpv/script-opts/jimaku.conf` with:
-```ini
-jimaku_api_key=YOUR_API_KEY_HERE
-SUBTITLE_CACHE_DIR=./subtitle-cache
-JIMAKU_AUTO_DOWNLOAD=yes
-JIMAKU_MAX_SUBS=10
-JIMAKU_ITEMS_PER_PAGE=6
-JIMAKU_MENU_TIMEOUT=15
-JIMAKU_FONT_SIZE=16
-JIMAKU_HIDE_SIGNS=no
-INITIAL_OSD_MESSAGES=yes
-LOG_FILE=no
-```
+   ```
+   jimaku_api_key=YOUR_API_KEY_HERE
+   ```
+
+3. **Configure max subtitles:** In the same config file, set maximum subtitles to load:
+   ```
+   JIMAKU_MAX_SUBS=10
+   ```
+   - **Range:** Any number from 1-50, or "all" for unlimited
+   - **Default:** 10 (if not specified)
+   - **Examples:** `JIMAKU_MAX_SUBS=5` or `JIMAKU_MAX_SUBS=all`
 **Get API key:** [jimaku.cc](https://jimaku.cc)
 
 * **Windows:** `%APPDATA%\mpv\scripts\`

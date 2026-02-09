@@ -1110,6 +1110,7 @@ show_download_settings_menu = function(selected)
             if JIMAKU_MAX_SUBS == 1 then JIMAKU_MAX_SUBS = 3
             elseif JIMAKU_MAX_SUBS == 3 then JIMAKU_MAX_SUBS = 5
             elseif JIMAKU_MAX_SUBS == 5 then JIMAKU_MAX_SUBS = 10
+            elseif JIMAKU_MAX_SUBS == 10 then JIMAKU_MAX_SUBS = "All"
             else JIMAKU_MAX_SUBS = 1 end
             pop_menu(); show_download_settings_menu(2)
         end},
@@ -2800,7 +2801,7 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
     end
     -- Determine how many to download
     local max_downloads = #matched_files
-    if JIMAKU_MAX_SUBS ~= "all" and type(JIMAKU_MAX_SUBS) == "number" then
+    if JIMAKU_MAX_SUBS ~= "All" and type(JIMAKU_MAX_SUBS) == "number" then
         max_downloads = math.min(JIMAKU_MAX_SUBS, #matched_files)
     end
     debug_log(string.format("Downloading %d of %d matched subtitle(s)...", max_downloads, #matched_files))
@@ -3975,7 +3976,12 @@ search_local_subtitle_cache = function(parsed, is_auto, anilist_id)
     sort_subtitles_by_episode(subtitle_files)
     
     local loaded_count = 0
-    local max_to_load = math.min(#subtitle_files, JIMAKU_MAX_SUBS or 5)
+    local max_to_load
+    if JIMAKU_MAX_SUBS == "All" then
+        max_to_load = #subtitle_files
+    else
+        max_to_load = math.min(#subtitle_files, (tonumber(JIMAKU_MAX_SUBS) or 5))
+    end
 
     for i = 1, max_to_load do
         local sub = subtitle_files[i]
