@@ -934,6 +934,20 @@ show_subtitle_browser = function()
     )
 end
 
+-- Apply a filter to the subtitle browser
+apply_browser_filter = function(filter_text)
+    debug_log("Applying browser filter: " .. (filter_text or "NONE"))
+    menu_state.browser_filter = filter_text
+    menu_state.browser_page = 1 -- Reset to first page of results
+    
+    -- Refresh the menu if it's currently showing the browser
+    if menu_state.active and #menu_state.stack > 0 and menu_state.stack[#menu_state.stack].title:match("Browse Jimaku Subs") then
+        pop_menu()
+        show_subtitle_browser()
+    else
+        render_menu_osd()
+    end
+end
 -------------------------------------------------------------------------------
 -- 5. ANILIST RESULTS BROWSER (PAGINATED - using generic function)
 -------------------------------------------------------------------------------
@@ -1066,21 +1080,6 @@ select_anilist_result = function(selected)
     end
     
     close_menu()
-end
-
--- Apply a filter to the subtitle browser
-apply_browser_filter = function(filter_text)
-    debug_log("Applying browser filter: " .. (filter_text or "NONE"))
-    menu_state.browser_filter = filter_text
-    menu_state.browser_page = 1 -- Reset to first page of results
-    
-    -- Refresh the menu if it's currently showing the browser
-    if menu_state.active and #menu_state.stack > 0 and menu_state.stack[#menu_state.stack].title:match("Browse Jimaku Subs") then
-        pop_menu()
-        show_subtitle_browser()
-    else
-        render_menu_osd()
-    end
 end
 
 -------------------------------------------------------------------------------
@@ -1748,7 +1747,7 @@ parse_jimaku_filename = function(filename)
     return nil, nil
 end
 -------------------------------------------------------------------------------
--- 13 MAIN FILENAME PARSER (WITH CRITICAL HOTFIXES)
+-- 13 MAIN FILENAME PARSER
 -------------------------------------------------------------------------------
 -- NEW: Strip Japanese/CJK/Korean characters and clean complex titles
 local function clean_japanese_text(title)
