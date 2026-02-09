@@ -1228,6 +1228,8 @@ end
 -- Cache Submenu
 -- Manage & Cleanup Menu (consolidates Cache + subtitle management)
 
+-- def overkill to have caches clean ups for jimaku,anilist,indexes like bro..cuz sub files are tiny in size, 
+-- we can create later some simple clean up that just nukes the folder with caches or smh
 
 -------------------------------------------------------------------------------
 -- 9. CACHE MANAGEMENT UTILITIES
