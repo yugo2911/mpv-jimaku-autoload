@@ -4114,6 +4114,9 @@ search_anilist = function(is_auto)
         local results = data.Page.media
         debug_log(string.format("Search: Processing %d potential matches...", #results))
         
+        -- Store all results for manual selection in "Pick from Results" menu
+        menu_state.search_results = results
+        
         local selected, actual_ep, actual_sea, seasons, match_method, confidence = 
             smart_match_anilist(results, parsed, tonumber(parsed.episode) or 1, parsed.season, extract_year(title_source))
 
