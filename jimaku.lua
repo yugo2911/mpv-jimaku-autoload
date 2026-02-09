@@ -311,9 +311,8 @@ save_preferred_groups = function()
     save_persistent_cache(PREFERRED_GROUPS_FILE, data)
     debug_log("Saved " .. #JIMAKU_PREFERRED_GROUPS .. " preferred groups to cache")
 end
--- TODO INDEX FILE LOCATIONS INSTEAD OF DUMB SCAN ON BOOT
 -------------------------------------------------------------------------------
--- INDEXING UTILITIES (With Enhanced Debugging)
+-- INDEXING UTILITIES
 -------------------------------------------------------------------------------
 local INDEX_FILE = CONFIG_DIR .. "/cache/sub_index.json"
 
@@ -3531,10 +3530,7 @@ local function make_anilist_request(query, variables)
     return data.data
 end
 -------------------------------------------------------------------------------
--- SMART MATCH ALGORITHM (FIXED)
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
--- SMART MATCH ALGORITHM (FIXED - with relations/SEQUEL graph walking)
+-- SMART MATCH ALGORITHM (with relations/SEQUEL graph walking)
 -------------------------------------------------------------------------------
 local function smart_match_anilist(results, parsed, episode_num, season_num, file_year)
     local selected = results[1]  -- Default to best search match
@@ -4001,9 +3997,6 @@ end
 
 -------------------------------------------------------------------------------
 -- ANILIST SEARCH & SYNC
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
--- ANILIST SEARCH & SYNC (WITH LOGGING)
 -------------------------------------------------------------------------------
 search_anilist = function(is_auto)
     local title_source = mp.get_property("media-title") or mp.get_property("filename")
