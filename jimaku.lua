@@ -624,8 +624,7 @@ show_main_menu = function()
         {text = "4. Manage & Cleanup",   action = function() show_manage_menu() end},
     }
     
-    -- local header = "JIMAKU SUBTITLE MANAGER\\N" .. status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
-    local header = status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
+    local header = status
     push_menu("Main Menu", items, nil, nil, nil, nil, header)
 end
 
@@ -656,7 +655,7 @@ show_download_menu = function()
     -- Exact mirror of main menu header formatting
     local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
                    or "Match: None (press '1' to search)"
-    local header = status .. "\\NSubs: " .. (ms.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
+    local header = status
 
     local items = {
         {
