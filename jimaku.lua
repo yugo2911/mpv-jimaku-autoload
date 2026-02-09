@@ -298,7 +298,7 @@ local function load_preferred_groups()
         {name = "Amazon", enabled = true},
         {name = "AMZN", enabled = true},
         {name = "Netflix", enabled = true},
-        {name = "CHS", enabled = false}
+        {name = "CHS", enabled = true}
     }
 end
 -- Save preferred groups to cache
