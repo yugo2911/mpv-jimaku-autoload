@@ -1,0 +1,21 @@
+offline
+    offline we should use cached data anilist, jimaku or what else we cache..
+    download all subtitiles from jimaku for the series
+        make it read local files even if anilist and jimaku fail, care cuz file names and sub names differ alot in format its very uncertain to get correct entries,
+        tho we can guess that jimaku uses romaji as entries, 
+        
+        so for this to be fully offline capable we would really want to use something like anime-offline-database project json file for info validation,
+        +kitsunekko mirror for local sub files,
+
+we have to check somewhere to skip exactly same loaded subs
+
+low priority
+- async ui / fetching so we can insta acess ui even if fetch etc is going on
+lets rethink how we do cahcing, what order to load the stuff in and what should be loaded async, make sure we index files deeper than 1 level cuz of archives they are at various levels
+makes sense to get local subs first if user has them from kitsunekko etc, if kittsuneko-mirror is used it lags mpv somtimes due ammount of files
+
+btw cache maniging is so aids cuz u gotta validate the local data aswell xD
+
+
+things breaking easily its smarter to create new script get it working, and then try to implement it.. worst when u dont know that smh broke..
+for kitsunekko mirror, local subs
