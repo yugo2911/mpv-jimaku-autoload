@@ -5,3 +5,6 @@ unsort/
 # Log Files
 *.log
 *.json
+test_simple.lua
+test_get_indexed_subs.lua
+todo
