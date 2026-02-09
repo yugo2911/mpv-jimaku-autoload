@@ -443,14 +443,19 @@ render_menu_osd = function()
     local fs, c = function(s) return "{\\fs"..(JIMAKU_FONT_SIZE+s).."}" end, function(h) return "{\\c&H"..h.."&}" end
     local style = { h=fs(4)..c("00FFFF").."{\\b1}", s=fs(0)..c("00FF00").."{\\b1}", n=fs(0)..c("FFFFFF"), d=fs(0)..c("808080"), f=fs(-2)..c("CCCCCC"), dim=fs(-6)..c("888888"), st=fs(-2)..c("AAAAAA"), sep=fs(-2)..c("808080") }
     
-    local ass = mp.get_property_osd("osd-ass-cc/0")..style.h..ctx.title.."\\N"..style.sep..string.rep("━", 40).."\\N"
-    if ctx.header then ass = ass..style.st..ctx.header.."\\N"..style.sep..string.rep("─", 40).."\\N" end
+    -- Calculate separator width based on longest text (accounting for font size differences)
+    local title_visual_width = math.ceil(#ctx.title * 1.2)  -- Title is bigger font (+4)
+    local header_visual_width = ctx.header and math.ceil(#ctx.header * 0.9) or 0  -- Header is smaller font (-2)
+    local sep_width = math.max(45, title_visual_width, header_visual_width)
+    
+    local ass = mp.get_property_osd("osd-ass-cc/0")..style.h..ctx.title.."\\N"..style.sep..string.rep("━", sep_width).."\\N"
+    if ctx.header then ass = ass..style.st..ctx.header.."\\N"..style.sep..string.rep("━", sep_width).."\\N" end  -- Changed ─ to ━
     for i, it in ipairs(ctx.items) do
         local is_s = (i == ctx.selected)
         local st = is_s and style.s or (it.disabled and style.d or style.n)
         ass = ass..st..(is_s and "→ " or "  ")..it.text..(it.hint and " "..style.dim.."("..it.hint..")"..st or "").."\\N"
     end
-    ass = ass..style.sep..string.rep("━", 40).."\\N"..style.f..(ctx.footer or (#menu_state.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close"))
+    ass = ass..style.sep..string.rep("━", sep_width).."\\N"..style.f..(ctx.footer or (#menu_state.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close"))
     
     mp.osd_message(ass, MENU_TIMEOUT)
     if menu_state.timeout_timer then menu_state.timeout_timer:kill() end
@@ -653,7 +658,7 @@ show_download_menu = function()
     
     -- Exact mirror of main menu header formatting
     local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
-                   or "Match: None (press '1' to search)"
+                     or "Match: None (press 'A' to search)"
     local header = status
 
     local items = {
