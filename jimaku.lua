@@ -2846,7 +2846,7 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
         end
     end
     if success_count > 0 then
-        conditional_osd(string.format("✓ Loaded matched subtitle(s)"), 4, is_auto)
+        -- conditional_osd(string.format("✓ Loaded matched subtitle(s)"), 4, is_auto)
         return true
     else
         debug_log("Failed to download or extract any subtitles", true)
