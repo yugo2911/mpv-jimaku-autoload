@@ -55,6 +55,8 @@ JIMAKU_FONT_SIZE     = script_opts.JIMAKU_FONT_SIZE
 INITIAL_OSD_MESSAGES = script_opts.INITIAL_OSD_MESSAGES
 USE_ANILIST_API      = script_opts.USE_ANILIST_API
 USE_JIMAKU_API       = script_opts.USE_JIMAKU_API
+-- Standardized error message for API key issues
+API_KEY_ERROR_MSG = "Error: Jimaku API key not set"
 -- Will be loaded from cache during initialization
 JIMAKU_PREFERRED_GROUPS = nil
 -- Runtime Caches
@@ -296,7 +298,7 @@ local function load_preferred_groups()
         {name = "Amazon", enabled = true},
         {name = "AMZN", enabled = true},
         {name = "Netflix", enabled = true},
-        {name = "CHS", enabled = false}
+        {name = "CHS", enabled = true}
     }
 end
 -- Save preferred groups to cache
@@ -548,7 +550,7 @@ end
 -- Download a specific subtitle file selected from browser
 download_selected_subtitle_action = function(file)
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
-        mp.osd_message("Error: Jimaku API key not set", 3)
+        mp.osd_message(API_KEY_ERROR_MSG, 3)
         return
     end
 
@@ -622,8 +624,7 @@ show_main_menu = function()
         {text = "4. Manage & Cleanup",   action = function() show_manage_menu() end},
     }
     
-    -- local header = "JIMAKU SUBTITLE MANAGER\\N" .. status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
-    local header = status .. "\\NSubs: " .. (menu_state.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
+    local header = status
     push_menu("Main Menu", items, nil, nil, nil, nil, header)
 end
 
@@ -654,7 +655,7 @@ show_download_menu = function()
     -- Exact mirror of main menu header formatting
     local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
                    or "Match: None (press '1' to search)"
-    local header = status .. "\\NSubs: " .. (ms.loaded_subs_count or 0) .. "/" .. JIMAKU_MAX_SUBS
+    local header = status
 
     local items = {
         {
@@ -811,8 +812,11 @@ show_subtitle_browser = function()
     -- Fetch files if not cached
     if not menu_state.browser_files then
         mp.osd_message("Fetching subtitle list...", 30)
-        local files = fetch_all_episode_files(jimaku_id)
-        if files then
+        local files, error_code = fetch_all_episode_files(jimaku_id)
+        if error_code == "MISSING_KEY" then
+            mp.osd_message(API_KEY_ERROR_MSG, 3)
+            return
+        elseif files then
             logical_sort_files(files)
         end
         menu_state.browser_files = files
@@ -1038,7 +1042,7 @@ select_anilist_result = function(selected)
     mp.osd_message("Selected: " .. title_text, 3)
     
     -- Trigger subtitle search O(1)
-    local jimaku_entry = search_jimaku_subtitles(selected.id)
+    local jimaku_entry, error_code = search_jimaku_subtitles(selected.id)
     if jimaku_entry then
         menu_state.jimaku_id = jimaku_entry.id
         menu_state.jimaku_entry = jimaku_entry
@@ -1051,6 +1055,8 @@ select_anilist_result = function(selected)
             seasons,
             selected
         )
+    elseif error_code == "MISSING_KEY" then
+        mp.osd_message(API_KEY_ERROR_MSG, 3)
     else
         mp.osd_message("No Jimaku entry found for this show.", 3)
     end
@@ -1103,6 +1109,7 @@ show_download_settings_menu = function(selected)
             if JIMAKU_MAX_SUBS == 1 then JIMAKU_MAX_SUBS = 3
             elseif JIMAKU_MAX_SUBS == 3 then JIMAKU_MAX_SUBS = 5
             elseif JIMAKU_MAX_SUBS == 5 then JIMAKU_MAX_SUBS = 10
+            elseif JIMAKU_MAX_SUBS == 10 then JIMAKU_MAX_SUBS = "All"
             else JIMAKU_MAX_SUBS = 1 end
             pop_menu(); show_download_settings_menu(2)
         end},
@@ -2340,6 +2347,11 @@ local function search_jimaku_subtitles(anilist_id)
 end
 -- Fetch ALL subtitle files for an entry (no episode filter)
 fetch_all_episode_files = function(entry_id)
+    -- API key validation
+    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
+        return nil, "MISSING_KEY"
+    end
+    
     -- Check cache first
     if EPISODE_CACHE[entry_id] then
         local cache_age = os.time() - EPISODE_CACHE[entry_id].timestamp
@@ -2757,8 +2769,18 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
 end
 -- Smart subtitle download with intelligent matching
 local function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anilist_entry, is_auto)
+    -- API key validation
+    if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
+        conditional_osd(API_KEY_ERROR_MSG, 3, is_auto)
+        return false
+    end
+    
     -- Fetch all files for this entry
-    local all_files = fetch_all_episode_files(entry_id)
+    local all_files, error_code = fetch_all_episode_files(entry_id)
+    if error_code == "MISSING_KEY" then
+        conditional_osd(API_KEY_ERROR_MSG, 3, is_auto)
+        return false
+    end
     if not all_files or #all_files == 0 then
         debug_log("No subtitle files available for this entry", false)
         return false
@@ -2778,7 +2800,7 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
     end
     -- Determine how many to download
     local max_downloads = #matched_files
-    if JIMAKU_MAX_SUBS ~= "all" and type(JIMAKU_MAX_SUBS) == "number" then
+    if JIMAKU_MAX_SUBS ~= "All" and type(JIMAKU_MAX_SUBS) == "number" then
         max_downloads = math.min(JIMAKU_MAX_SUBS, #matched_files)
     end
     debug_log(string.format("Downloading %d of %d matched subtitle(s)...", max_downloads, #matched_files))
@@ -2823,7 +2845,7 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
         end
     end
     if success_count > 0 then
-        conditional_osd(string.format("✓ Loaded matched subtitle(s)"), 4, is_auto)
+        -- conditional_osd(string.format("✓ Loaded matched subtitle(s)"), 4, is_auto)
         return true
     else
         debug_log("Failed to download or extract any subtitles", true)
@@ -3392,7 +3414,7 @@ end
 -- New helper to track currently loaded subtitles from track-list
 update_loaded_subs_list = function()
     -- Get files from JSON index (O(1) Disk) instead of re-scanning folders
-    local indexed_files = get_indexed_subs()
+    local indexed_files = get_indexed_subs(true)
     local count = 0
     -- Clear current list
     menu_state.loaded_subs = {}
@@ -3417,7 +3439,7 @@ end
 mp.register_script_message("jimaku-search", function(query)
     if not query or query == "" then return end
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then 
-        mp.osd_message("Set API key first", 3) 
+        mp.osd_message(API_KEY_ERROR_MSG, 3) 
         return 
     end
     mp.osd_message("Searching: " .. query, 3)
@@ -3953,7 +3975,12 @@ search_local_subtitle_cache = function(parsed, is_auto, anilist_id)
     sort_subtitles_by_episode(subtitle_files)
     
     local loaded_count = 0
-    local max_to_load = math.min(#subtitle_files, JIMAKU_MAX_SUBS or 5)
+    local max_to_load
+    if JIMAKU_MAX_SUBS == "All" then
+        max_to_load = #subtitle_files
+    else
+        max_to_load = math.min(#subtitle_files, (tonumber(JIMAKU_MAX_SUBS) or 5))
+    end
 
     for i = 1, max_to_load do
         local sub = subtitle_files[i]
@@ -4087,6 +4114,9 @@ search_anilist = function(is_auto)
         local results = data.Page.media
         debug_log(string.format("Search: Processing %d potential matches...", #results))
         
+        -- Store all results for manual selection in "Pick from Results" menu
+        menu_state.search_results = results
+        
         local selected, actual_ep, actual_sea, seasons, match_method, confidence = 
             smart_match_anilist(results, parsed, tonumber(parsed.episode) or 1, parsed.season, extract_year(title_source))
 
@@ -4113,12 +4143,14 @@ search_anilist = function(is_auto)
 
             -- 3. Get Subtitles
             debug_log("Jimaku: Searching subtitles for AniList ID " .. selected.id)
-            local jimaku_entry = search_jimaku_subtitles(selected.id)
+            local jimaku_entry, error_code = search_jimaku_subtitles(selected.id)
             if jimaku_entry then
                 debug_log("Jimaku: Found entry " .. jimaku_entry.id .. ". Starting download...")
                 menu_state.jimaku_id = jimaku_entry.id
                 menu_state.jimaku_entry = jimaku_entry
                 download_subtitle_smart(jimaku_entry.id, actual_ep, actual_sea, seasons, selected, is_auto)
+            elseif error_code == "MISSING_KEY" then
+                conditional_osd(API_KEY_ERROR_MSG, 3, is_auto)
             else
                 debug_log("Jimaku: No entry found on Jimaku.cc, checking local cache...")
                 if not search_local_subtitle_cache(parsed, is_auto, selected.id) then
