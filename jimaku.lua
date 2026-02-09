@@ -625,7 +625,7 @@ show_main_menu = function()
         -- Pointing to the consolidated menu
         {text = "2. Search & Download", action = function() show_download_menu() end},
         {text = "3. Preferences",        action = function() show_preferences_menu() end},
-        {text = "4. Manage & Cleanup",   action = function() show_manage_menu() end},
+        
     }
     
     local header = status
@@ -1227,60 +1227,7 @@ end
 
 -- Cache Submenu
 -- Manage & Cleanup Menu (consolidates Cache + subtitle management)
-show_manage_menu = function()
-    -- Calculate cache stats
-    local count_table = count_table_entries
-    local anilist_count = count_table(ANILIST_CACHE)
-    local jimaku_count = count_table(JIMAKU_CACHE)
-    local episode_count = count_table(EPISODE_CACHE)
-    
-    local items = {
-        {text = "SUBTITLE MANAGEMENT", disabled = true},
-        {text = "1. Clear Loaded Subs", action = clear_subs_action},
-        {text = "2. Clear Subtitle Cache (Disk)", action = function()
-            clear_subtitle_cache()
-            pop_menu()
-        end},
-        {text = "", disabled = true},  -- Spacer
-        {text = "CACHE MANAGEMENT", disabled = true},
-        {text = "3. View Cache Stats", action = function()
-            local stats = string.format(
-                "Cache Statistics:\\N" ..
-                "━━━━━━━━━━━━━━━━━━━━━━━━━━━\\N" ..
-                "AniList Searches: %d\\N" ..
-                "Jimaku Entries: %d\\N" ..
-                "File Lists: %d\\N\\N" ..
-                "Cache Dir:\\N%s",
-                anilist_count, jimaku_count, episode_count,
-                SUBTITLE_CACHE_DIR
-            )
-            mp.osd_message(stats, 8)
-        end},
-        {text = "4. Clear Search Cache", hint = anilist_count .. " entries", action = function()
-            ANILIST_CACHE = {}
-            save_ANILIST_CACHE()
-            mp.osd_message("AniList search cache cleared", 2)
-            pop_menu()
-        end},
-        {text = "5. Clear Jimaku Cache", hint = jimaku_count .. " entries", action = function()
-            JIMAKU_CACHE = {}
-            save_JIMAKU_CACHE()
-            mp.osd_message("Jimaku entry cache cleared", 2)
-            pop_menu()
-        end},
-        {text = "6. Clear File List Cache", hint = episode_count .. " lists", action = function()
-            EPISODE_CACHE = {}
-            EPISODE_CACHE_KEYS = {}
-            mp.osd_message("File list cache cleared", 2)
-            pop_menu()
-        end},
-        {text = "0. Back to Main Menu", action = pop_menu},
-    }
-    push_menu("Manage & Cleanup", items)
-end
 
--- Keep old name for compatibility
-show_cache_menu = show_manage_menu
 
 -------------------------------------------------------------------------------
 -- 9. CACHE MANAGEMENT UTILITIES
