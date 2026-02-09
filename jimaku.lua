@@ -311,9 +311,8 @@ save_preferred_groups = function()
     save_persistent_cache(PREFERRED_GROUPS_FILE, data)
     debug_log("Saved " .. #JIMAKU_PREFERRED_GROUPS .. " preferred groups to cache")
 end
--- TODO INDEX FILE LOCATIONS INSTEAD OF DUMB SCAN ON BOOT
 -------------------------------------------------------------------------------
--- INDEXING UTILITIES (With Enhanced Debugging)
+-- INDEXING UTILITIES
 -------------------------------------------------------------------------------
 local INDEX_FILE = CONFIG_DIR .. "/cache/sub_index.json"
 
@@ -1401,35 +1400,38 @@ end
 -- 10. CONFIGURATION SAVING
 -------------------------------------------------------------------------------
 
-save_config_to_file = function()
-    debug_log("========== SAVE CONFIG DEBUG START ==========")
-    
-    -- Check standalone mode
-    if STANDALONE_MODE then 
-        debug_log("ERROR: Cannot save config in standalone mode", true)
-        mp.osd_message("✗ Cannot save in standalone mode", 3)
-        return 
+-- Helper function to mask sensitive data in logs
+local function mask_sensitive_value(value)
+    if not value or value == "" or #value < 8 then
+        return "***"
     end
-    
-    debug_log("✓ Not in standalone mode")
-    
-    -- Debug CONFIG_DIR
-    debug_log("CONFIG_DIR = " .. tostring(CONFIG_DIR))
-    debug_log("CONFIG_DIR type = " .. type(CONFIG_DIR))
-    
-    -- Helper function to mask sensitive data in logs
-    local function mask_api_key(key)
-        if not key or key == "" or #key < 8 then
-            return "***"
-        end
-        return key:sub(1, 4) .. "..." .. key:sub(-4)
+    return value:sub(1, 4) .. "..." .. value:sub(-4)
+end
+
+-- Helper function to serialize value based on type
+local function serialize_config_value(value)
+    if type(value) == "boolean" then
+        return value and "yes" or "no"
+    elseif type(value) == "string" or type(value) == "number" then
+        return tostring(value)
     end
-    
-    -- Update script_opts with current values
-    -- IMPORTANT: For SUBTITLE_CACHE_DIR, preserve the original relative path format
-    -- by NOT overwriting script_opts.SUBTITLE_CACHE_DIR (it already has the user's preferred format)
-    debug_log("Updating script_opts with current runtime values...")
-    
+    return nil
+end
+
+-- Helper function to verify directory writability
+local function verify_directory_writable(dir_path)
+    local test_file = dir_path .. "/test_write.tmp"
+    local f = io.open(test_file, "w")
+    if f then
+        f:close()
+        os.remove(test_file)
+        return true
+    end
+    return false
+end
+
+-- Helper function to update script options with runtime values
+local function update_script_opts()
     script_opts.jimaku_api_key = JIMAKU_API_KEY or ""
     script_opts.JIMAKU_AUTO_DOWNLOAD = JIMAKU_AUTO_DOWNLOAD
     script_opts.JIMAKU_FONT_SIZE = JIMAKU_FONT_SIZE
@@ -1439,16 +1441,90 @@ save_config_to_file = function()
     script_opts.LOG_ONLY_ERRORS = LOG_ONLY_ERRORS
     script_opts.JIMAKU_MAX_SUBS = JIMAKU_MAX_SUBS
     script_opts.JIMAKU_HIDE_SIGNS = JIMAKU_HIDE_SIGNS_ONLY
-    
-    -- DON'T overwrite SUBTITLE_CACHE_DIR - keep original user format (relative vs absolute)
     script_opts.LOG_FILE = LOG_FILE and true or false
     
-    -- Log current values (with API key masked)
+    -- Note: SUBTITLE_CACHE_DIR preserved in original user format
+end
+
+-- Helper function to log current configuration
+local function log_current_config()
     debug_log("Current settings to save:")
     for k, v in pairs(script_opts) do
-        local display_value = (k == "jimaku_api_key") and mask_api_key(tostring(v)) or tostring(v)
+        local display_value = (k == "jimaku_api_key") 
+            and mask_sensitive_value(tostring(v)) 
+            or tostring(v)
         debug_log(string.format("  %s = %s (%s)", k, display_value, type(v)))
     end
+end
+
+-- Helper function to write configuration lines
+local function write_config_lines(file_handle, keys_order)
+    local write_count = 0
+    
+    for _, key in ipairs(keys_order) do
+        local value = script_opts[key]
+        if value ~= nil then
+            local serialized = serialize_config_value(value)
+            if serialized then
+                local line = key .. "=" .. serialized
+                local success, err = pcall(function() 
+                    file_handle:write(line .. "\n") 
+                end)
+                
+                if success then
+                    write_count = write_count + 1
+                    local log_line = (key == "jimaku_api_key") 
+                        and (key .. "=" .. mask_sensitive_value(value)) 
+                        or line
+                    debug_log(string.format("  Wrote: %s", log_line))
+                else
+                    debug_log(string.format("  Failed to write %s: %s", key, tostring(err)), true)
+                end
+            end
+        end
+    end
+    
+    return write_count
+end
+
+-- Helper function to verify written file
+local function verify_config_file(config_path, write_count)
+    local file = io.open(config_path, "r")
+    if not file then
+        debug_log("✗ File verification failed - not readable after write!", true)
+        return false
+    end
+    
+    local content = file:read("*all")
+    file:close()
+    
+    debug_log("✓ File verification successful")
+    debug_log("File size: " .. #content .. " bytes")
+    debug_log("Lines written: " .. write_count)
+    debug_log("File content preview (sensitive data masked):")
+    
+    for line in content:gmatch("[^\r\n]+") do
+        if line:match("^jimaku_api_key=") then
+            local key_val = line:match("^jimaku_api_key=(.*)$")
+            debug_log("  jimaku_api_key=" .. mask_sensitive_value(key_val))
+        else
+            debug_log("  " .. line)
+        end
+    end
+    
+    return true
+end
+
+-- Main configuration save function
+save_config_to_file = function()
+    debug_log("========== SAVE CONFIG DEBUG START ==========")
+    debug_log("CONFIG_DIR = " .. tostring(CONFIG_DIR))
+    debug_log("CONFIG_DIR type = " .. type(CONFIG_DIR))
+    
+    -- Update script options with current runtime values
+    debug_log("Updating script_opts with current runtime values...")
+    update_script_opts()
+    log_current_config()
     
     -- Construct paths
     local script_opts_dir = CONFIG_DIR .. "/script-opts"
@@ -1456,57 +1532,24 @@ save_config_to_file = function()
     debug_log("script_opts_dir = " .. script_opts_dir)
     debug_log("config_path = " .. config_path)
     
-    -- Check if directory exists
-    debug_log("Checking if script-opts directory exists...")
-    local dir_check = io.open(script_opts_dir, "r")
-    if dir_check then
-        dir_check:close()
-        debug_log("✓ Directory appears to exist (or is a file)")
-    else
-        debug_log("✗ Directory does not exist, attempting to create...")
-    end
-    
-    -- Try to create directory
+    -- Ensure directory exists
     debug_log("Creating directory: " .. script_opts_dir)
     ensure_directory(script_opts_dir)
-    debug_log("Directory creation command executed")
     
-    -- Verify directory creation
-    local dir_verify = io.open(script_opts_dir, "r")
-    if dir_verify then
-        dir_verify:close()
-        debug_log("✓ Directory verified after mkdir")
-    else
-        debug_log("✗ Directory still doesn't exist after mkdir!", true)
+    -- Verify directory is writable
+    if not verify_directory_writable(CONFIG_DIR) then
+        debug_log("✗ Parent directory not writable!", true)
+        mp.osd_message("✗ Failed to create config file\nDirectory not writable", 5)
+        debug_log("========== SAVE CONFIG DEBUG END (FAILED) ==========")
+        return
     end
     
-    -- Try opening file for writing
+    -- Open file for writing
     debug_log("Attempting to open file for writing: " .. config_path)
-    local f, err = io.open(config_path, "w")
-    if not f then
+    local file, err = io.open(config_path, "w")
+    if not file then
         local error_msg = "Failed to open config file: " .. (err or "unknown error")
         debug_log("✗ " .. error_msg, true)
-        debug_log("Attempting to get more error details...")
-        
-        -- Try to get file info
-        local test_read = io.open(config_path, "r")
-        if test_read then
-            debug_log("  - File exists and is readable")
-            test_read:close()
-        else
-            debug_log("  - File does not exist or is not readable")
-        end
-        
-        -- Check parent directory permissions
-        local parent_test = io.open(CONFIG_DIR .. "/test_write.tmp", "w")
-        if parent_test then
-            parent_test:close()
-            os.remove(CONFIG_DIR .. "/test_write.tmp")
-            debug_log("  - Parent directory IS writable")
-        else
-            debug_log("  - Parent directory NOT writable!", true)
-        end
-        
         mp.osd_message("✗ Failed to create config file\n" .. (err or ""), 5)
         debug_log("========== SAVE CONFIG DEBUG END (FAILED) ==========")
         return
@@ -1514,8 +1557,7 @@ save_config_to_file = function()
     
     debug_log("✓ File opened successfully, writing config...")
     
-    -- Write configuration with detailed logging
-    local write_count = 0
+    -- Write configuration
     local keys_order = {
         "jimaku_api_key",
         "SUBTITLE_CACHE_DIR",
@@ -1530,63 +1572,20 @@ save_config_to_file = function()
         "LOG_FILE"
     }
     
-    for _, key in ipairs(keys_order) do
-        local value = script_opts[key]
-        if value ~= nil then
-            local line = ""
-            if type(value) == "boolean" then
-                line = key .. "=" .. (value and "yes" or "no")
-            elseif type(value) == "string" then
-                line = key .. "=" .. value
-            elseif type(value) == "number" then
-                line = key .. "=" .. tostring(value)
-            end
-            
-            if line ~= "" then
-                local success, write_err = pcall(function() f:write(line .. "\n") end)
-                if success then
-                    write_count = write_count + 1
-                    -- Mask API key in log
-                    local log_line = (key == "jimaku_api_key") and (key .. "=" .. mask_api_key(value)) or line
-                    debug_log(string.format("  Wrote: %s", log_line))
-                else
-                    debug_log(string.format("  FAILED to write: %s (error: %s)", key, tostring(write_err)), true)
-                end
-            end
-        end
-    end
+    local write_count = write_config_lines(file, keys_order)
     
     -- Close file
-    local close_success, close_err = pcall(function() f:close() end)
-    if close_success then
-        debug_log("✓ File closed successfully")
-    else
+    local close_success, close_err = pcall(function() file:close() end)
+    if not close_success then
         debug_log("✗ Error closing file: " .. tostring(close_err), true)
-    end
-    
-    -- Verify file was written
-    debug_log("Verifying written file...")
-    local verify = io.open(config_path, "r")
-    if verify then
-        local content = verify:read("*all")
-        verify:close()
-        debug_log("✓ File verification successful")
-        debug_log("File size: " .. #content .. " bytes")
-        debug_log("Lines written: " .. write_count)
-        debug_log("File content preview (API key masked):")
-        
-        for line in content:gmatch("[^\r\n]+") do
-            if line:match("^jimaku_api_key=") then
-                local key_val = line:match("^jimaku_api_key=(.*)$")
-                debug_log("  jimaku_api_key=" .. mask_api_key(key_val))
-            else
-                debug_log("  " .. line)
-            end
-        end
     else
-        debug_log("✗ File verification FAILED - file not readable after write!", true)
+        debug_log("✓ File closed successfully")
     end
     
+    -- Verify file was written correctly
+    verify_config_file(config_path, write_count)
+    
+    -- Success notification
     mp.osd_message("✓ Settings saved to jimaku.conf\n(" .. write_count .. " settings)", 3)
     debug_log("Configuration saved to " .. config_path)
     debug_log("========== SAVE CONFIG DEBUG END (SUCCESS) ==========")
@@ -3531,10 +3530,7 @@ local function make_anilist_request(query, variables)
     return data.data
 end
 -------------------------------------------------------------------------------
--- SMART MATCH ALGORITHM (FIXED)
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
--- SMART MATCH ALGORITHM (FIXED - with relations/SEQUEL graph walking)
+-- SMART MATCH ALGORITHM (with relations/SEQUEL graph walking)
 -------------------------------------------------------------------------------
 local function smart_match_anilist(results, parsed, episode_num, season_num, file_year)
     local selected = results[1]  -- Default to best search match
@@ -4001,9 +3997,6 @@ end
 
 -------------------------------------------------------------------------------
 -- ANILIST SEARCH & SYNC
--------------------------------------------------------------------------------
--------------------------------------------------------------------------------
--- ANILIST SEARCH & SYNC (WITH LOGGING)
 -------------------------------------------------------------------------------
 search_anilist = function(is_auto)
     local title_source = mp.get_property("media-title") or mp.get_property("filename")
