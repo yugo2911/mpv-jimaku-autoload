@@ -676,8 +676,7 @@ show_download_menu = function()
             end
         },
         {
-        {
-            text = "3. Manual Search", 
+            text = "3. Manual Jimaku Search", 
             action = function()
                 mp.osd_message("Type search in console (press ~)", 3)
                 mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
