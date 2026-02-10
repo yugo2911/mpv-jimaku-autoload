@@ -2398,7 +2398,6 @@ local function subtitle_matches_title(subtitle_filename, title_variations)
     return false, nil
 end
 -- ENHANCED: Intelligent episode matching with AniList cross-verification
--- ENHANCED: Intelligent episode matching with AniList cross-verification
 local function match_episodes_intelligent(files, target_episode, target_season, seasons_data, anilist_entry)
     if not files or #files == 0 then
         return {}
