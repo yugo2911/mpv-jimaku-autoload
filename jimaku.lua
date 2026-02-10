@@ -503,23 +503,6 @@ end
 -- MENU DEFINITIONS & ACTIONS
 -------------------------------------------------------------------------------
 
--- Action handlers
-reload_subtitles_action = function()
-    mp.osd_message("Reloading...", 2)
-    pop_menu()
-end
-
-download_more_action = function()
-    mp.osd_message("Downloading more...", 2)
-    pop_menu()
-end
-
-clear_subs_action = function()
-    mp.command("sub-remove")
-    mp.osd_message("✓ Subtitles cleared", 2)
-    pop_menu()
-end
-
 -- Show detailed match info
 show_current_match_info_action = function()
     local m = menu_state.current_match
@@ -688,11 +671,6 @@ show_download_menu = function()
                 mp.osd_message("Type search in console (press ~)", 3)
                 mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
             end
-        },
-        {
-            text = "5. Reload Current Match", 
-            disabled = not has_match, 
-            action = reload_subtitles_action
         },
         {text = "0. Back to Main Menu", action = pop_menu},
     }
