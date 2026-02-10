@@ -700,9 +700,6 @@ show_download_menu = function()
     push_menu("Search & Download", items, nil, nil, nil, nil, header)
 end
 
--- Keep old function name for compatibility
-show_subtitles_menu = show_download_menu
-
 -------------------------------------------------------------------------------
 -- 3. PAGINATED MENU GENERIC FUNCTION
 -------------------------------------------------------------------------------
@@ -2943,10 +2940,7 @@ local function is_relevant_subtitle(filename, target_title, target_episode, targ
     end
     return false, "no match"
 end
--------------------------------------------------------------------------------
--- HELPER: Recursively scan directory for subtitle files with filtering
--- CRITICAL: Only scans within the specified base_dir to prevent cache pollution
--------------------------------------------------------------------------------
+
 -------------------------------------------------------------------------------
 -- HELPER: Read and parse .kitsuinfo.json from a directory
 -------------------------------------------------------------------------------
