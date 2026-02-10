@@ -3385,6 +3385,12 @@ mp.register_script_message("jimaku-search", function(query)
     end
     show_results_page(1)
 end)
+
+-- Handle browser filter input from console
+mp.register_script_message("jimaku-browser-filter", function(text)
+    debug_log("Browser: Received filter input: " .. (text or ""))
+    apply_browser_filter(text ~= "" and text or nil)
+end)
 -------------------------------------------------------------------------------
 -- MPV MODE - ANILIST INTEGRATION
 -------------------------------------------------------------------------------
