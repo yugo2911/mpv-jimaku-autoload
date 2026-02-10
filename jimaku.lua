@@ -1020,6 +1020,13 @@ select_anilist_result = function(selected)
     local title_text = selected.title.romaji or selected.title.english or "Unknown"
     debug_log("User manually selected AniList result: " .. (title_text .. " ID: " .. selected.id))
     
+    -- Safety check for parsed_data
+    if not menu_state.parsed_data then
+        debug_log("Error: parsed_data is nil in select_anilist_result", true)
+        mp.osd_message("Error: No parsed data available", 3)
+        return
+    end
+    
     local episode_num = tonumber(menu_state.parsed_data.episode) or 1
     local season_num = menu_state.parsed_data.season
     
@@ -2215,7 +2222,7 @@ end
 -- MPV MODE - JIMAKU INTEGRATION
 -------------------------------------------------------------------------------
 -- Search Jimaku for subtitle entry by AniList ID
-local function search_jimaku_subtitles(anilist_id)
+function search_jimaku_subtitles(anilist_id)
     -- Check toggle first
     if not USE_JIMAKU_API then
         debug_log("Jimaku API disabled by config", false)
@@ -2689,7 +2696,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     return result_files
 end
 -- Smart subtitle download with intelligent matching
-local function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anilist_entry, is_auto)
+function download_subtitle_smart(entry_id, target_episode, target_season, seasons_data, anilist_entry, is_auto)
     -- API key validation
     if not JIMAKU_API_KEY or JIMAKU_API_KEY == "" then
         conditional_osd(API_KEY_ERROR_MSG, 3, is_auto)
@@ -3428,7 +3435,7 @@ end
 -------------------------------------------------------------------------------
 -- SMART MATCH ALGORITHM (with relations/SEQUEL graph walking)
 -------------------------------------------------------------------------------
-local function smart_match_anilist(results, parsed, episode_num, season_num, file_year)
+function smart_match_anilist(results, parsed, episode_num, season_num, file_year)
     local selected = results[1]  -- Default to best search match
     local actual_episode = episode_num
     local actual_season = season_num or 1
@@ -4026,6 +4033,7 @@ search_anilist = function(is_auto)
             -- Store seasons data at menu_state level so the subtitle browser
             -- can access it later for cumulative episode jumping
             menu_state.seasons_data = seasons
+            menu_state.parsed_data = parsed
 
             conditional_osd(string.format("Match: %s\nS%d E%d | %s", 
                 selected.title.romaji, actual_sea, actual_ep, selected.format or "TV"), 5, is_auto)
