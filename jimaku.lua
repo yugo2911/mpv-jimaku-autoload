@@ -541,6 +541,7 @@ download_selected_subtitle_action = function(file)
         return
     end
 
+    debug_log("Browser: User selected subtitle: " .. file.name)
     local subtitle_path = SUBTITLE_CACHE_DIR .. "/" .. file.name
     mp.osd_message("Downloading selected subtitle...", 30)
 
@@ -557,6 +558,19 @@ download_selected_subtitle_action = function(file)
     })
 
     if download_result.status == 0 then
+        debug_log("Browser: Successfully downloaded subtitle: " .. file.name)
+        
+        -- Load the subtitle into MPV
+        mp.commandv("sub-add", subtitle_path, "select")
+        debug_log("Browser: Successfully loaded subtitle into MPV: " .. file.name)
+        
+        -- Update menu state tracking
+        table.insert(menu_state.loaded_subs_files, file.name)
+        menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+        
+        -- Show success message
+        mp.osd_message("✓ Loaded: " .. file.name, 2)
+        
         -- Logic for updating OSD if browser is active
         local current_menu = menu_state.stack[#menu_state.stack]
         if menu_state.active and current_menu and current_menu.title:match("Browse Jimaku Subs") then
@@ -565,7 +579,7 @@ download_selected_subtitle_action = function(file)
                 mp.osd_message(string.format("Filter: '%s' (Press / to change)", filter), 3)
             end
         end
-    end
+        end
 end
 
 -- Forward declarations to prevent nil reference errors
