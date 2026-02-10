@@ -3337,19 +3337,18 @@ handle_archive_file = function(archive_path, default_flag)
 end
 -- New helper to track currently loaded subtitles from track-list
 update_loaded_subs_list = function()
-    -- Get files from JSON index (O(1) Disk) instead of re-scanning folders
-    local indexed_files = get_indexed_subs(true)
-    local count = 0
-    -- Clear current list
-    menu_state.loaded_subs = {}
-    -- O(n) loop through memory is significantly faster than disk I/O
-    for _, filepath in ipairs(indexed_files) do
-        -- logic to check if this sub matches current video 
-        -- (e.g., string matching or just counting total cached)
-        count = count + 1
+    local tracks = mp.get_property_native("track-list")
+    menu_state.loaded_subs_files = {}
+    menu_state.loaded_subs_count = 0
+    for _, track in ipairs(tracks) do
+        if track.type == "sub" and track.external then
+            -- Use filename from path
+            local filename = track.external_filename or track.title or track.id
+            table.insert(menu_state.loaded_subs_files, filename)
+            menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+        end
     end
-    menu_state.loaded_subs_count = count
-    debug_log("Loaded subs updated from index: " .. count)
+    debug_log("Loaded subs updated from track-list: " .. menu_state.loaded_subs_count)
 end
 -------------------------------------------------------------------------------
 -- ULTRA SIMPLE MANUAL SEARCH
