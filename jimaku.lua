@@ -676,11 +676,8 @@ show_download_menu = function()
             end
         },
         {
-            text = "3. Manual AniList Search", 
-            action = manual_search_action
-        },
         {
-            text = "4. Manual Jimaku Search", 
+            text = "3. Manual Search", 
             action = function()
                 mp.osd_message("Type search in console (press ~)", 3)
                 mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
@@ -3326,6 +3323,10 @@ end
 -- ULTRA SIMPLE MANUAL SEARCH
 -------------------------------------------------------------------------------
 -- Just one function to handle everything
+local function url_encode_simple(str)
+    return str:gsub("%s", "+")
+end
+
 function manual_search_action()
     mp.osd_message("Type search in console (press ~)", 3)
     mp.commandv("script-message-to", "console", "type", "script-message jimaku-search ")
@@ -3338,7 +3339,8 @@ mp.register_script_message("jimaku-search", function(query)
         return 
     end
     mp.osd_message("Searching: " .. query, 3)
-    local search_url = string.format("%s/entries/search?anime=true&query=%s", JIMAKU_API_URL, query)
+local encoded_query = url_encode_simple(query)
+local search_url = string.format("%s/entries/search?anime=true&query=%s", JIMAKU_API_URL, encoded_query)
     local result = mp.command_native({
         name = "subprocess",
         capture_stdout = true,
