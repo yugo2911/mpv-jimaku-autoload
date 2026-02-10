@@ -1197,16 +1197,6 @@ show_preferred_groups_menu = function(selected)
 end
 
 -------------------------------------------------------------------------------
--- 8. MANAGE & CLEANUP MENU
--------------------------------------------------------------------------------
-
--- Cache Submenu
--- Manage & Cleanup Menu (consolidates Cache + subtitle management)
-
--- def overkill to have caches clean ups for jimaku,anilist,indexes like bro..cuz sub files are tiny in size, 
--- we can create later some simple clean up that just nukes the folder with caches or smh
-
--------------------------------------------------------------------------------
 -- 9. CACHE MANAGEMENT UTILITIES
 -------------------------------------------------------------------------------
 
@@ -1521,14 +1511,13 @@ end
 -------------------------------------------------------------------------------
 -- 11 CUMULATIVE EPISODE CALCULATION
 -------------------------------------------------------------------------------
--- Calculate cumulative episode number with confidence tracking
-local function calculate_jimaku_episode_safe(season_num, episode_num, seasons_data)
+-- Calculate cumulative episode number from season/episode
+local function calculate_jimaku_episode(season_num, episode_num, seasons_data)
     if not season_num or season_num == 1 then
-        return episode_num, "certain"
+        return episode_num
     end
     -- Calculate cumulative episodes from previous seasons
     local cumulative = 0
-    local confidence = "certain"
     for season_idx = 1, season_num - 1 do
         if seasons_data and seasons_data[season_idx] then
             cumulative = cumulative + seasons_data[season_idx].eps
@@ -1537,23 +1526,14 @@ local function calculate_jimaku_episode_safe(season_num, episode_num, seasons_da
         else
             -- Fallback: assume standard 13-episode season
             cumulative = cumulative + 13
-            confidence = "uncertain"
-            debug_log(string.format("  S%d episode count UNKNOWN - assuming 13 (UNCERTAIN)", 
+            debug_log(string.format("  S%d episode count UNKNOWN - assuming 13", 
                 season_idx), true)
         end
     end
     local jimaku_ep = cumulative + episode_num
-    if confidence == "uncertain" then
-        debug_log(string.format("WARNING: Cumulative calculation used fallback assumptions. Result may be incorrect!"), true)
-        debug_log(string.format("  Calculated: S%dE%d -> Jimaku Episode %d (UNCERTAIN)", 
-            season_num, episode_num, jimaku_ep), true)
-    end
-    return jimaku_ep, confidence
-end
--- Wrapper for backwards compatibility (without confidence tracking)
-local function calculate_jimaku_episode(season_num, episode_num, seasons_data)
-    local result, _ = calculate_jimaku_episode_safe(season_num, episode_num, seasons_data)
-    return result
+    debug_log(string.format("  Calculated: S%dE%d -> Jimaku Episode %d", 
+        season_num, episode_num, jimaku_ep))
+    return jimaku_ep
 end
 -- Reverse: Convert Jimaku cumulative episode to AniList season episode
 local function convert_jimaku_to_anilist_episode(jimaku_ep, target_season, seasons_data)
@@ -2779,10 +2759,7 @@ local function download_subtitle_smart(entry_id, target_episode, target_season, 
         return false
     end
 end
--- ARCHIVE HANDLING FIX V3 FOR jimaku.lua
--- This version fixes the issue where files from other extracted archives were being loaded
--- The problem: recursive scan was picking up files from the subtitle-cache directory
--- Solution: Only scan within the specific extraction directory, not parent directories
+
 -------------------------------------------------------------------------------
 -- HELPER: Detect archive files
 -------------------------------------------------------------------------------
@@ -2822,32 +2799,7 @@ local function is_within_directory(path, base_dir)
     -- Check if path starts with base_dir
     return norm_path:sub(1, #norm_base) == norm_base
 end
--------------------------------------------------------------------------------
--- HELPER: Parse episode number from subtitle filename
--------------------------------------------------------------------------------
-local function extract_episode_from_filename(filename)
-    -- Try various episode number patterns
-    local patterns = {
-        "S%d+E(%d+)",           -- S01E05
-        "%.E(%d+)%.",           -- .E05.
-        "%.E(%d+)%-",           -- .E05-
-        "%- (%d+) ",            -- - 05 
-        "第(%d+)話",            -- 第489話 (Japanese episode marker)
-        "%s(%d+)%s",            -- space 05 space
-        "%s(%d+)%.",            -- space 05 dot
-        "ep?%.?%s?(%d+)",       -- ep 05, ep.05, ep05
-        "%[(%d+)%]",            -- [05]
-        "^(%d+)%.",             -- 05. at start
-        "^(%d+)%-",             -- 05- at start
-    }
-    for _, pattern in ipairs(patterns) do
-        local ep = filename:match(pattern)
-        if ep then
-            return tonumber(ep)
-        end
-    end
-    return nil
-end
+
 -------------------------------------------------------------------------------
 -- HELPER: Check if subtitle filename matches the target anime/episode
 -------------------------------------------------------------------------------
