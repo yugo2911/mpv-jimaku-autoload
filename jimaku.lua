@@ -2727,204 +2727,71 @@ local function is_relevant_subtitle(filename, target_title, target_episode, targ
 end
 
 -------------------------------------------------------------------------------
--- HELPER: Read and parse .kitsuinfo.json from a directory
--------------------------------------------------------------------------------
-local function read_kitsuinfo(dir_path)
-    local info_path = dir_path .. "/.kitsuinfo.json"
-    local f = io.open(info_path, "r")
-    if not f then return nil end
-    
-    local content = f:read("*all")
-    f:close()
-    
-    if not content or content == "" then return nil end
-    local ok, data = pcall(utils.parse_json, content)
-    
-    if ok and data then
-        return data
-    end
-    return nil
-end
-
--------------------------------------------------------------------------------
--- HELPER: Recursively scan directory for subtitle files with filtering
--- CRITICAL: Only scans within the specified base_dir to prevent cache pollution
--------------------------------------------------------------------------------
+-- HELPER: Scan for subtitles in directory
 local function scan_for_subtitles(dir_path, base_dir, target_title, target_episode, target_season, max_depth, target_anilist_id)
     max_depth = max_depth or 3
     if max_depth <= 0 then return {} end
     
     if not is_within_directory(dir_path, base_dir) then
-        debug_log(string.format("SECURITY: Refusing to scan outside base directory: %s", dir_path), true)
         return {}
     end
     
-    local subtitle_files = {}
+    local results = {}
+    local is_large_dir = false
     
-    -- Read metadata for CURRENT directory to validate files within it
-    local current_kitsu = read_kitsuinfo(dir_path)
-    
-    -- VALIDATE METADATA: Does this metadata belong to the anime we are looking for?
-    -- This prevents using "BNA" metadata to validate "BNA" files when looking for "Naruto"
-    -- just because we wandered into the "BNA" folder.
-    local dataset_matches_target = false
-    if current_kitsu then
-        if target_anilist_id and current_kitsu.anilist_id then
-             if tonumber(target_anilist_id) == tonumber(current_kitsu.anilist_id) then
-                 dataset_matches_target = true
-             end
-        elseif target_title and current_kitsu.name then
-             -- Fallback title match if no ID provided in arguments or metadata
-             local meta_relevant, _ = is_relevant_subtitle(current_kitsu.name, target_title, nil, nil)
-             if meta_relevant then dataset_matches_target = true end
-        end
-    end
-
-    -- 1. Scan Files directly (no need for file_info)
+    -- Scan files
     local files = utils.readdir(dir_path, "files")
     if files then
         for _, item in ipairs(files) do
             local ext = item:match("%.([^%.]+)$")
-            if ext then
-                ext = ext:lower()
-                if ext == "ass" or ext == "srt" or ext == "vtt" or ext == "sub" then
-                    local relevant, reason = is_relevant_subtitle(item, target_title, target_episode, target_season)
-                    
-                    -- Fallback: Check metadata keys if primary title failed AND metadata matches target
-                    if not relevant and dataset_matches_target then
-                        if current_kitsu.japanese_name then
-                            local jp_relevant, jp_reason = is_relevant_subtitle(item, current_kitsu.japanese_name, target_episode, target_season)
-                            if jp_relevant then
-                                relevant = true
-                                reason = jp_reason .. " [match via japanese_name]"
-                            end
-                        end
-                        if not relevant and current_kitsu.english_name then
-                            local en_relevant, en_reason = is_relevant_subtitle(item, current_kitsu.english_name, target_episode, target_season)
-                            if en_relevant then
-                                relevant = true
-                                reason = en_reason .. " [match via english_name]"
-                            end
-                        end
-                    end
-
-                    if relevant then
-                        -- FIX: Use same parser as Jimaku files
-                        local season, episode = parse_jimaku_filename(item)
-                        table.insert(subtitle_files, {
-                            path = dir_path .. "/" .. item,
-                            name = item,
-                            episode = episode,
-                            season = season
-                        })
-                        debug_log(string.format("Accepted: %s (%s)", item, reason))
-                    end
+            if ext and (ext == "ass" or ext == "srt" or ext == "vtt" or ext == "sub") then
+                local relevant = is_relevant_subtitle(item, target_title, target_episode, target_season)
+                if relevant then
+                    local season, episode = parse_jimaku_filename(item)
+                    table.insert(results, {
+                        path = dir_path .. "/" .. item,
+                        name = item,
+                        episode = episode,
+                        season = season
+                    })
                 end
             end
         end
-    else
-        debug_log("Cannot read directory files: " .. dir_path, true)
     end
     
-    -- 2. Scan Subdirectories with SMART FILTERING
+    -- Scan subdirs (with smart filtering for large dirs)
     local dirs = utils.readdir(dir_path, "dirs")
     if dirs then
-        local recurse_dirs = {}
-        -- HEURISTIC: If directory contains many folders (>50), it's likely a library root.
-        -- We should only enter subfolders that fuzzy-match the target title.
-        local use_smart_filter = #dirs > 50 and target_title and target_title ~= ""
+        is_large_dir = #dirs > 50
         
-        -- Filter logic
-        local candidate_dirs = {}
-        if use_smart_filter then
-            debug_log(string.format("Large directory detected (%d subdirs). Using smart filtering for '%s'", #dirs, target_title))
-            local search_terms = {}
-            for w in target_title:lower():gmatch("%w+") do
-                if #w > 2 then table.insert(search_terms, w) end
-            end
-            
-            for _, d in ipairs(dirs) do
-                if d ~= "." and d ~= ".." and not d:match("^extracted_") then
+        for _, d in ipairs(dirs) do
+            if d ~= "." and d ~= ".." and not d:match("^extracted_") then
+                -- For large dirs, only enter folders matching target title
+                if is_large_dir and target_title then
                     local d_lower = d:lower()
-                    
-                    -- Structural Whitelist: Always enter these common organization folders
-                    local is_structural = d_lower == "anime" or d_lower == "tv" or d_lower == "movies" or d_lower == "movie" or
-                                          d_lower:match("anime_") or d_lower:match("_tv$") or d_lower:match("^season") or 
-                                          d:len() <= 3  -- Allow "A", "09", "TV" etc
-                    
-                    if is_structural then
-                         table.insert(candidate_dirs, d)
-                    else
-                        -- Standard Fuzzy Match
-                        local match = false
-                        if #search_terms > 0 then
-                            for _, term in ipairs(search_terms) do
-                                if d_lower:find(term, 1, true) then match = true; break end
-                            end
-                        else
-                            match = true
-                        end
-                        if match then table.insert(candidate_dirs, d) end
+                    local t_lower = target_title:lower()
+                    local is_structural = d_lower == "anime" or d_lower == "tv" or d_lower == "movie" or d:len() <= 3
+                    local matches = is_structural
+                    for w in t_lower:gmatch("%w+") do
+                        if #w > 2 and d_lower:find(w, 1, true) then matches = true; break end
                     end
+                    if not matches then goto continue end
                 end
-            end
-            debug_log(string.format("Smart Filter: Reduced %d dirs to %d candidate(s)", #dirs, #candidate_dirs))
-        else
-            -- Small directory, consider all non-special folders
-            for _, d in ipairs(dirs) do
-                if d ~= "." and d ~= ".." and not d:match("^extracted_") then
-                    table.insert(candidate_dirs, d)
+                
+                -- Recurse
+                local sub_files = scan_for_subtitles(
+                    dir_path .. "/" .. d, base_dir, 
+                    target_title, target_episode, target_season, 
+                    max_depth - 1, target_anilist_id)
+                for _, sf in ipairs(sub_files) do
+                    table.insert(results, sf)
                 end
-            end
-        end
-
-        -- Process Candidate Directories (Check metadata)
-        for _, d in ipairs(candidate_dirs) do
-            local full_path = dir_path .. "/" .. d
-            local should_enter = true
-            
-            -- CHECK .kitsuinfo.json for precise matching
-            local kitsu = read_kitsuinfo(full_path)
-            if kitsu then
-                if target_anilist_id and kitsu.anilist_id then
-                    -- ID MATCH: If IDs don't match, SKIP this folder (unless it's a very similar ID? No, IDs should be exact)
-                    if tonumber(kitsu.anilist_id) ~= tonumber(target_anilist_id) then
-                        should_enter = false
-                        -- debug_log(string.format("Kitsunekko: Skipping '%s' (ID %s != %s)", d, kitsu.anilist_id, target_anilist_id))
-                    else
-                        debug_log(string.format("Kitsunekko: ID MATCH for '%s' (ID: %s)", d, kitsu.anilist_id))
-                    end
-                elseif target_title then
-                    -- NAME MATCH: Check English/Japanese names if ID not available
-                    local name_match = false
-                    local search_lower = target_title:lower()
-                    if kitsu.english_name and kitsu.english_name:lower():find(search_lower, 1, true) then name_match = true end
-                    if kitsu.japanese_name and kitsu.japanese_name:lower():find(search_lower, 1, true) then name_match = true end
-                    
-                    -- If we're already inside a candidate folder (passed smart filter), 
-                    -- allow entry even if metadata name doesn't perfectly match (could be synonyms).
-                    -- But if metadata name strictly contradicts, maybe valid check?
-                    -- For now, metadata existence confirms it is an anime folder, so trusting "should_enter" as true is safe
-                    -- unless we wanted to be stricter.
-                    -- Let's stick to: if ID is provided, enforce it. If not, just proceed.
-                end
-            end
-            
-            if should_enter then
-                table.insert(recurse_dirs, d)
-            end
-        end
-        
-        -- Recurse into selected directories
-        for _, d in ipairs(recurse_dirs) do
-            local sub_files = scan_for_subtitles(dir_path .. "/" .. d, base_dir, target_title, target_episode, target_season, max_depth - 1, target_anilist_id)
-            for _, sf in ipairs(sub_files) do
-                table.insert(subtitle_files, sf)
+                ::continue::
             end
         end
     end
     
-    return subtitle_files
+    return results
 end
 -------------------------------------------------------------------------------
 -- HELPER: Sort subtitle files by episode number
@@ -2943,114 +2810,41 @@ local function sort_subtitles_by_episode(subtitle_files)
     end)
 end
 -------------------------------------------------------------------------------
--- HELPER: Try different extraction methods based on platform and availability
--------------------------------------------------------------------------------
+-- HELPER: Extract archive
 local function try_extract_archive(archive_path, extract_dir)
-    local is_windows = package.config:sub(1,1) == '\\'
     local ext = archive_path:match("%.([^%.]+)$")
     if ext then ext = ext:lower() end
-    -- Ensure extract directory exists
+    
+    -- Create output directory
+    local is_windows = package.config:sub(1,1) == '\\'
+    local mkdir_cmd = is_windows and {"cmd", "/c", "mkdir", extract_dir:gsub('/', '\\')} 
+                           or {"mkdir", "-p", extract_dir}
+    
     if STANDALONE_MODE then
-        if is_windows then
-            os.execute('mkdir "' .. extract_dir:gsub('/', '\\') .. '" 2>nul')
-        else
-            os.execute('mkdir -p ' .. escape_path(extract_dir))
-        end
+        os.execute(table.concat(mkdir_cmd, " "))
     else
-        -- Create directory using mpv command
-        if is_windows then
-            mp.command_native({
-                name = "subprocess",
-                playback_only = false,
-                capture_stdout = true,
-                args = {"cmd", "/c", "mkdir", extract_dir:gsub('/', '\\')}
-            })
-        else
-            mp.command_native({
-                name = "subprocess",
-                playback_only = false,
-                args = {"mkdir", "-p", extract_dir}
-            })
-        end
+        mp.command_native({name = "subprocess", playback_only = false, args = mkdir_cmd})
     end
-    debug_log("Extracting to: " .. extract_dir)
-    -- Method 1: Try 7z (best cross-platform support)
-    local extraction_attempts = {}
-    if is_windows then
-        -- Windows extraction methods
-        table.insert(extraction_attempts, {
-            name = "7z",
-            args = {"7z", "x", archive_path, "-o" .. extract_dir, "-y"}
-        })
-        -- PowerShell for ZIP only
-        if ext == "zip" then
-            table.insert(extraction_attempts, {
-                name = "powershell",
-                args = {"powershell", "-Command", 
-                    "Expand-Archive -Path " .. escape_path(archive_path) .. 
-                    " -DestinationPath " .. escape_path(extract_dir) .. " -Force"}
-            })
-        end
-        -- tar (Windows 10+)
-        table.insert(extraction_attempts, {
-            name = "tar",
-            args = {"tar", "-xf", archive_path, "-C", extract_dir}
-        })
-    else
-        -- Unix/Linux extraction methods
-        if ext == "zip" then
-            table.insert(extraction_attempts, {
-                name = "unzip",
-                args = {"unzip", "-o", archive_path, "-d", extract_dir}
-            })
-        elseif ext == "7z" then
-            table.insert(extraction_attempts, {
-                name = "7z",
-                args = {"7z", "x", archive_path, "-o" .. extract_dir, "-y"}
-            })
-        elseif ext == "rar" then
-            table.insert(extraction_attempts, {
-                name = "unrar",
-                args = {"unrar", "x", "-o+", archive_path, extract_dir}
-            })
-        end
-        -- tar works for most formats on Unix
-        table.insert(extraction_attempts, {
-            name = "tar",
-            args = {"tar", "-xf", archive_path, "-C", extract_dir}
-        })
-    end
-    -- Try each extraction method
-    for _, method in ipairs(extraction_attempts) do
-        debug_log("Trying extraction with: " .. method.name)
+    
+    -- Build extraction commands by format
+    local methods = {
+        zip = {"unzip", "-o", archive_path, "-d", extract_dir},
+        ["7z"] = {"7z", "x", archive_path, "-o" .. extract_dir, "-y"},
+        rar = {"unrar", "x", "-o+", archive_path, extract_dir},
+    }
+    methods.tar = {"tar", "-xf", archive_path, "-C", extract_dir}
+    
+    -- Try extraction methods
+    for name, args in pairs(methods) do
+        debug_log("Trying: " .. name)
         local result
         if STANDALONE_MODE then
-            local cmd_parts = {}
-            for _, arg in ipairs(method.args) do
-                table.insert(cmd_parts, arg:match("%s") and escape_path(arg) or arg)
-            end
-            local cmd = table.concat(cmd_parts, " ")
-            debug_log("Command: " .. cmd)
-            local success = os.execute(cmd)
-            result = {status = success and 0 or 1}
+            result = {status = os.execute(table.concat(args, " ")) and 0 or 1}
         else
-            result = mp.command_native({
-                name = "subprocess",
-                playback_only = false,
-                capture_stdout = true,
-                capture_stderr = true,
-                args = method.args
-            })
+            result = mp.command_native({name = "subprocess", playback_only = false, args = args})
         end
         if result.status == 0 then
-            debug_log("Extraction successful using: " .. method.name)
             return true
-        else
-            debug_log(string.format("Extraction failed with %s (status: %d)", 
-                method.name, result.status))
-            if result.stderr then
-                debug_log("Error output: " .. result.stderr)
-            end
         end
     end
     return false
