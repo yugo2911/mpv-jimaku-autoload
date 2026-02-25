@@ -303,30 +303,37 @@ get_indexed_subs = function(auto_create)
     return data.files
 end
 -------------------------------------------------------------------------------
--- MENU SYSTEM STATE
+-- MENU SYSTEM STATE (split into 3 clear categories)
 -------------------------------------------------------------------------------
-local menu_state = {
+-- Navigation state (menu tree traversal)
+local nav = {
     active = false,
-    stack = {},  -- Stack of menu contexts {name, items, selected, scroll_offset}
+    stack = {},  -- {title, items, selected, on_left, on_right, header, footer}
     timeout_timer = nil,
-    -- Tracked state for menu display
-    current_match = nil,
-    loaded_subs_count = 0,
-    loaded_subs_files = {},  -- Track loaded subtitle filenames
+}
+
+-- Session state (what anime/file we're working with)
+local session = {
+    current_match = nil,   -- {title, anilist_id, episode, season, ...}
     jimaku_id = nil,
     jimaku_entry = nil,
     anilist_id = nil,
-    parsed_data = nil,
+    parsed_data = nil,     -- {title, episode, season, ...}
     seasons_data = {},
-    -- Subtitle browser state
-    browser_page = 1,
-    browser_files = nil,  -- Cached file list
-    browser_filter = nil, -- Filter text
-    items_per_page = JIMAKU_ITEMS_PER_PAGE,
-    -- AniList search results (for manual picker)
-    search_results = {},
-    search_results_page = 1
 }
+
+-- Browser state (for browsing/paging results)
+local browser = {
+    page = 1,
+    files = {},
+    filter = nil,
+    items_per_page = JIMAKU_ITEMS_PER_PAGE,
+    search_results = {},
+    search_results_page = 1,
+    loaded_subs_count = 0,
+    loaded_subs_files = {},
+}
+
 -- Menu configuration
 local MENU_TIMEOUT = JIMAKU_MENU_TIMEOUT
 -------------------------------------------------------------------------------
@@ -336,9 +343,9 @@ local render_menu_osd, close_menu, push_menu, pop_menu, bind_menu_keys
 local handle_menu_up, handle_menu_down, handle_menu_left, handle_menu_right, handle_menu_select, handle_menu_num
 
 close_menu = function()
-    if not menu_state.active then return end
-    menu_state.active, menu_state.stack = false, {}
-    if menu_state.timeout_timer then menu_state.timeout_timer:kill(); menu_state.timeout_timer = nil end
+    if not nav.active then return end
+    nav.active, nav.stack = false, {}
+    if nav.timeout_timer then nav.timeout_timer:kill(); nav.timeout_timer = nil end
     local keys = {"up","down","left","right","select","close","up-alt","down-alt","select-alt","back-alt","quit-alt","wheel-up","wheel-down","mbtn-left","mbtn-right","search-slash","filter-f","clear-x","delete-ctrl-del","filter-reset"}
     for _, k in ipairs(keys) do mp.remove_key_binding("menu-"..k) end
     for i = 0, 9 do mp.remove_key_binding("menu-num-"..i) end
@@ -346,8 +353,8 @@ close_menu = function()
 end
 
 render_menu_osd = function()
-    local ctx = menu_state.stack[#menu_state.stack]
-    if not menu_state.active or not ctx then return end
+    local ctx = nav.stack[#nav.stack]
+    if not nav.active or not ctx then return end
     local fs, c = function(s) return "{\\fs"..(JIMAKU_FONT_SIZE+s).."}" end, function(h) return "{\\c&H"..h.."&}" end
     local style = { h=fs(4)..c("00FFFF").."{\\b1}", s=fs(0)..c("00FF00").."{\\b1}", n=fs(0)..c("FFFFFF"), d=fs(0)..c("808080"), f=fs(-2)..c("CCCCCC"), dim=fs(-6)..c("888888"), st=fs(-2)..c("AAAAAA"), sep=fs(-2)..c("808080") }
     
@@ -363,17 +370,17 @@ render_menu_osd = function()
         local st = is_s and style.s or (it.disabled and style.d or style.n)
         ass = ass..st..(is_s and "→ " or "  ")..it.text..(it.hint and " "..style.dim.."("..it.hint..")"..st or "").."\\N"
     end
-    ass = ass..style.sep..string.rep("━", sep_width).."\\N"..style.f..(ctx.footer or (#menu_state.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close"))
+    ass = ass..style.sep..string.rep("━", sep_width).."\\N"..style.f..(ctx.footer or (#nav.stack > 1 and "ESC: Back | 0: Back" or "ESC: Close"))
     
     mp.osd_message(ass, MENU_TIMEOUT)
-    if menu_state.timeout_timer then menu_state.timeout_timer:kill() end
-    menu_state.timeout_timer = mp.add_timeout(MENU_TIMEOUT, close_menu)
+    if nav.timeout_timer then nav.timeout_timer:kill() end
+    nav.timeout_timer = mp.add_timeout(MENU_TIMEOUT, close_menu)
 end
 
 local function conditional_osd(m, d, a) if m and (not a or INITIAL_OSD_MESSAGES) then mp.osd_message(m, d) end end
 
 local function handle_menu_nav(dir)
-    local ctx = menu_state.stack[#menu_state.stack]
+    local ctx = nav.stack[#nav.stack]
     if not ctx then return end
     local init = ctx.selected
     repeat
@@ -384,28 +391,28 @@ local function handle_menu_nav(dir)
 end
 
 handle_menu_up, handle_menu_down = function() handle_menu_nav(-1) end, function() handle_menu_nav(1) end
-handle_menu_left = function() local c = menu_state.stack[#menu_state.stack] if c.on_left then c.on_left() end end
-handle_menu_right = function() local c = menu_state.stack[#menu_state.stack] if c.on_right then c.on_right() end end
-handle_menu_select = function() local c = menu_state.stack[#menu_state.stack] local it = c.items[c.selected] if it.action and not it.disabled then it.action() end end
-handle_menu_num = function(n) if n == 0 then pop_menu() else local c = menu_state.stack[#menu_state.stack] local it = c.items[n] if it and it.action and not it.disabled then it.action() end end end
+handle_menu_left = function() local c = nav.stack[#nav.stack] if c.on_left then c.on_left() end end
+handle_menu_right = function() local c = nav.stack[#nav.stack] if c.on_right then c.on_right() end end
+handle_menu_select = function() local c = nav.stack[#nav.stack] local it = c.items[c.selected] if it.action and not it.disabled then it.action() end end
+handle_menu_num = function(n) if n == 0 then pop_menu() else local c = nav.stack[#nav.stack] local it = c.items[n] if it and it.action and not it.disabled then it.action() end end end
 
 push_menu = function(t, i, f, l, r, s, h)
-    if #menu_state.stack == 0 then bind_menu_keys() end
-    table.insert(menu_state.stack, {title=t, items=i, footer=f, on_left=l, on_right=r, selected=s or 1, header=h})
-    menu_state.active = true; render_menu_osd()
+    if #nav.stack == 0 then bind_menu_keys() end
+    table.insert(nav.stack, {title=t, items=i, footer=f, on_left=l, on_right=r, selected=s or 1, header=h})
+    nav.active = true; render_menu_osd()
 end
 
-pop_menu = function() if #menu_state.stack > 1 then table.remove(menu_state.stack); render_menu_osd() else close_menu() end end
+pop_menu = function() if #nav.stack > 1 then table.remove(nav.stack); render_menu_osd() else close_menu() end end
 
 bind_menu_keys = function()
     local b = {{"UP","up",handle_menu_up},{"DOWN","down",handle_menu_down},{"LEFT","left",handle_menu_left},{"RIGHT","right",handle_menu_right},{"ENTER","select",handle_menu_select},{"ESC","close",pop_menu},{"k","up-alt",handle_menu_up},{"j","down-alt",handle_menu_down},{"l","select-alt",handle_menu_select},{"h","back-alt",pop_menu},{"q","quit-alt",close_menu},{"WHEEL_UP","wheel-up",handle_menu_up},{"WHEEL_DOWN","wheel-down",handle_menu_down},{"MBTN_LEFT","mbtn-left",handle_menu_select},{"MBTN_RIGHT","mbtn-right",pop_menu}}
     for _, x in ipairs(b) do mp.add_forced_key_binding(x[1], "menu-"..x[2], x[3]) end
     for i = 0, 9 do mp.add_forced_key_binding(tostring(i), "menu-num-"..i, function() handle_menu_num(i) end) end
-    local function trig() local c = menu_state.stack[#menu_state.stack] if menu_state.active and c.title:match("Jimaku") then mp.commandv("script-message-to","console","type","script-message jimaku-browser-filter ") end end
+    local function trig() local c = nav.stack[#nav.stack] if nav.active and c.title:match("Jimaku") then mp.commandv("script-message-to","console","type","script-message jimaku-browser-filter ") end end
     mp.add_forced_key_binding("/", "menu-search-slash", trig)
     mp.add_forced_key_binding("f", "menu-filter-f", trig)
-    mp.add_forced_key_binding("BS", "menu-filter-reset", function() if menu_state.active and menu_state.stack[#menu_state.stack].title:match("Jimaku") then apply_browser_filter(nil) end end)
-    mp.add_forced_key_binding("Ctrl+DEL", "menu-delete-ctrl-del", function() local c = menu_state.stack[#menu_state.stack] if menu_state.active and c.title == "Release Group Priority" and c.selected <= #JIMAKU_PREFERRED_GROUPS then table.remove(JIMAKU_PREFERRED_GROUPS, c.selected); save_preferred_groups(); pop_menu(); show_preferred_groups_menu(math.max(1, math.min(c.selected, #JIMAKU_PREFERRED_GROUPS))) end end)
+    mp.add_forced_key_binding("BS", "menu-filter-reset", function() if nav.active and nav.stack[#nav.stack].title:match("Jimaku") then apply_browser_filter(nil) end end)
+    mp.add_forced_key_binding("Ctrl+DEL", "menu-delete-ctrl-del", function() local c = nav.stack[#nav.stack] if nav.active and c.title == "Release Group Priority" and c.selected <= #JIMAKU_PREFERRED_GROUPS then table.remove(JIMAKU_PREFERRED_GROUPS, c.selected); save_preferred_groups(); pop_menu(); show_preferred_groups_menu(math.max(1, math.min(c.selected, #JIMAKU_PREFERRED_GROUPS))) end end)
 end
 -------------------------------------------------------------------------------
 -- MENU DEFINITIONS & ACTIONS
@@ -413,7 +420,7 @@ end
 
 -- Show detailed match info
 show_current_match_info_action = function()
-    local m = menu_state.current_match
+    local m = session.current_match
     if not m then
         mp.osd_message("No match information available", 3)
         return
@@ -473,16 +480,16 @@ download_selected_subtitle_action = function(file)
         debug_log("Browser: Successfully loaded subtitle into MPV: " .. file.name)
         
         -- Update menu state tracking
-        table.insert(menu_state.loaded_subs_files, file.name)
-        menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+        table.insert(browser.loaded_subs_files, file.name)
+        browser.loaded_subs_count = browser.loaded_subs_count + 1
         
         -- Show success message
         mp.osd_message("✓ Loaded: " .. file.name, 2)
         
         -- Logic for updating OSD if browser is active
-        local current_menu = menu_state.stack[#menu_state.stack]
-        if menu_state.active and current_menu and current_menu.title:match("Browse Jimaku Subs") then
-            local filter = menu_state.browser_filter
+        local current_menu = nav.stack[#nav.stack]
+        if nav.active and current_menu and current_menu.title:match("Browse Jimaku Subs") then
+            local filter = browser.filter
             if filter then
                 mp.osd_message(string.format("Filter: '%s' (Press / to change)", filter), 3)
             end
@@ -499,9 +506,9 @@ local show_main_menu, show_download_menu
 
 -- 1. Main Menu (Updated to point to consolidated menu)
 show_main_menu = function()
-    if menu_state.active then
-        if #menu_state.stack > 1 then
-            while #menu_state.stack > 1 do table.remove(menu_state.stack) end
+    if nav.active then
+        if #nav.stack > 1 then
+            while #nav.stack > 1 do table.remove(nav.stack) end
             render_menu_osd()
         else
             close_menu()
@@ -509,10 +516,10 @@ show_main_menu = function()
         return
     end
     
-    menu_state.stack = {}
-    menu_state.active = false
-    local m = menu_state.current_match
-    local has_match = menu_state.jimaku_id ~= nil
+    nav.stack = {}
+    nav.active = false
+    local m = session.current_match
+    local has_match = session.jimaku_id ~= nil
     
     local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
                      or "Match: None (press 'A' to search)"
@@ -523,7 +530,7 @@ show_main_menu = function()
             hint = has_match and "View all files" or "No match yet", 
             disabled = not has_match, 
             action = function()
-                menu_state.browser_page = nil
+                browser.page = nil
                 show_subtitle_browser()
             end
         },
@@ -544,12 +551,10 @@ end
 -- Consolidated Search & Download Menu
 -- Replaces both show_download_menu and show_search_menu
 show_download_menu = function()
-    local ms = menu_state
-    
     -- Entry logic: Only exit/pop if this specific menu is already at the top of the stack
     -- Otherwise, we let it fall through to push the menu
-    if ms.active and ms.stack[#ms.stack] and ms.stack[#ms.stack].title == "Search & Download" then
-        if #ms.stack > 1 then
+    if nav.active and nav.stack[#nav.stack] and nav.stack[#nav.stack].title == "Search & Download" then
+        if #nav.stack > 1 then
             pop_menu()
         else
             close_menu()
@@ -557,9 +562,9 @@ show_download_menu = function()
         return
     end
 
-    local m = ms.current_match
-    local has_match = ms.jimaku_id ~= nil
-    local results_count = #ms.search_results
+    local m = session.current_match
+    local has_match = session.jimaku_id ~= nil
+    local results_count = #browser.search_results
     
     -- Exact mirror of main menu header formatting
     local status = m and string.format("Match: %s S%dE%d", m.title:sub(1,30), m.season or 1, m.episode or 1) 
@@ -579,7 +584,7 @@ show_download_menu = function()
             hint = results_count > 0 and (results_count .. " found") or "No results", 
             disabled = results_count == 0, 
             action = function()
-                ms.search_results_page = 1
+                browser.search_results_page = 1
                 show_search_results_menu()
             end
         },
@@ -603,22 +608,22 @@ end
 -- Generic function to display paginated menus
 -- Parameters:
 --   title_text: Base title for the menu (e.g., "Browse Jimaku Subs")
---   items_source: The full table of items to display (e.g., menu_state.browser_files)
---   current_page_key: String key in menu_state to track the current page (e.g., "browser_page")
+--   items_source: The full table of items to display (e.g., browser.files)
+--   current_page_key: String key in browser to track the current page (e.g., "page")
 --   item_formatter: Function(item, display_idx) -> {text, hint, disabled} for a single item
 --   item_action_builder: Function(item) -> Function() -> action for a single item
 --   footer_text: Optional footer message
 --   on_left_action: Optional function to call on left arrow (besides pagination)
 --   on_right_action: Optional function to call on right arrow (besides pagination)
 local function show_paginated_menu(title_text, items_source, current_page_key, item_formatter, item_action_builder, footer_text, on_left_action, on_right_action)
-    local page = menu_state[current_page_key] or 1
-    local per_page = menu_state.items_per_page
+    local page = browser[current_page_key] or 1
+    local per_page = browser.items_per_page
     local total_pages = math.ceil(#items_source / per_page)
 
     -- Ensure page is valid
     if page > total_pages and total_pages > 0 then page = total_pages end
     if page < 1 then page = 1 end
-    menu_state[current_page_key] = page -- Update state
+    browser[current_page_key] = page -- Update state
 
     local start_idx = (page - 1) * per_page + 1
     local end_idx = math.min(start_idx + per_page - 1, #items_source)
@@ -640,7 +645,7 @@ local function show_paginated_menu(title_text, items_source, current_page_key, i
 
     local on_left_nav = function()
         if page > 1 then
-            menu_state[current_page_key] = page - 1
+            browser[current_page_key] = page - 1
             pop_menu() -- Pop current to re-render
             -- Recurse to show updated page
             show_paginated_menu(title_text, items_source, current_page_key, item_formatter, item_action_builder, footer_text, on_left_action, on_right_action)
@@ -650,7 +655,7 @@ local function show_paginated_menu(title_text, items_source, current_page_key, i
 
     local on_right_nav = function()
         if page < total_pages then
-            menu_state[current_page_key] = page + 1
+            browser[current_page_key] = page + 1
             pop_menu() -- Pop current to re-render
             -- Recurse to show updated page
             show_paginated_menu(title_text, items_source, current_page_key, item_formatter, item_action_builder, footer_text, on_left_action, on_right_action)
@@ -700,14 +705,14 @@ end
 
 -- Subtitle Browser (Paginated)
 show_subtitle_browser = function()
-    local jimaku_id = menu_state.jimaku_id
+    local jimaku_id = session.jimaku_id
     if not jimaku_id then
         mp.osd_message("No Jimaku ID available. Run search first.", 3)
         return
     end
     
     -- Fetch files if not cached
-    if not menu_state.browser_files then
+    if not browser.files then
         mp.osd_message("Fetching subtitle list...", 30)
         local files, error_code = fetch_all_episode_files(jimaku_id)
         if error_code == "MISSING_KEY" then
@@ -716,21 +721,21 @@ show_subtitle_browser = function()
         elseif files then
             logical_sort_files(files)
         end
-        menu_state.browser_files = files
+        browser.files = files
         mp.osd_message("", 0)
     end
     
-    if not menu_state.browser_files or #menu_state.browser_files == 0 then
+    if not browser.files or #browser.files == 0 then
         mp.osd_message("No subtitles found on Jimaku", 3)
         return
     end
     
-    local all_files = menu_state.browser_files
+    local all_files = browser.files
     local filtered_files = {}
     
     -- Apply filter if active
-    if menu_state.browser_filter then
-        local filter = menu_state.browser_filter:lower()
+    if browser.filter then
+        local filter = browser.filter:lower()
         for _, file in ipairs(all_files) do
             local name = file.name:lower()
             -- Check filename or parsed episode number
@@ -745,20 +750,20 @@ show_subtitle_browser = function()
     end
     
     -- If page is nil, jump to current episode
-    if not menu_state.browser_page or menu_state.browser_page < 1 then
-        menu_state.browser_page = 1
+    if not browser.page or browser.page < 1 then
+        browser.page = 1
         -- Get target episode from current_match
-        local target_ep = menu_state.current_match and menu_state.current_match.episode
-        local target_season = menu_state.current_match and menu_state.current_match.season
+        local target_ep = session.current_match and session.current_match.episode
+        local target_season = session.current_match and session.current_match.season
         
         -- Calculate cumulative episode for matching (like download logic does)
         local target_cumulative = nil
-        if target_ep and menu_state.seasons_data then
+        if target_ep and session.seasons_data then
             if target_season and target_season > 1 then
                 local cumulative = 0
                 for season_idx = 1, target_season - 1 do
-                    if menu_state.seasons_data[season_idx] then
-                        cumulative = cumulative + menu_state.seasons_data[season_idx].eps
+                    if session.seasons_data[season_idx] then
+                        cumulative = cumulative + session.seasons_data[season_idx].eps
                     end
                 end
                 target_cumulative = cumulative + target_ep
@@ -791,7 +796,7 @@ show_subtitle_browser = function()
                 end
                 
                 if matched then
-                    menu_state.browser_page = math.ceil(i / menu_state.items_per_page)
+                    browser.page = math.ceil(i / browser.items_per_page)
                     break
                 end
             end
@@ -801,7 +806,7 @@ show_subtitle_browser = function()
     -- Item formatter for subtitle browser
     local subtitle_item_formatter = function(file, display_idx)
         local is_loaded = false
-        for _, loaded_name in ipairs(menu_state.loaded_subs_files) do
+        for _, loaded_name in ipairs(browser.loaded_subs_files) do
             if loaded_name == file.name then is_loaded = true break end
         end
         local item_text = string.format("{\\fs%d}%d. %s", JIMAKU_FONT_SIZE - 2, display_idx, file.name)
@@ -814,13 +819,13 @@ show_subtitle_browser = function()
         return function() download_selected_subtitle_action(file) end
     end
 
-    local title_prefix = menu_state.browser_filter and string.format("FILTERED: '%s' ", menu_state.browser_filter) or ""
+    local title_prefix = browser.filter and string.format("FILTERED: '%s' ", browser.filter) or ""
     local footer = "←/→ Page | [F] Filter | [X] Clear | [UP/DOWN] Select"
     
     show_paginated_menu(
         title_prefix .. "Browse Jimaku Subs",
         filtered_files,
-        "browser_page",
+        "page",
         subtitle_item_formatter,
         subtitle_action_builder,
         footer
@@ -830,11 +835,11 @@ end
 -- Apply a filter to the subtitle browser
 apply_browser_filter = function(filter_text)
     debug_log("Applying browser filter: " .. (filter_text or "NONE"))
-    menu_state.browser_filter = filter_text
-    menu_state.browser_page = 1 -- Reset to first page of results
+    browser.filter = filter_text
+    browser.page = 1 -- Reset to first page of results
     
     -- Refresh the menu if it's currently showing the browser
-    if menu_state.active and #menu_state.stack > 0 and menu_state.stack[#menu_state.stack].title:match("Browse Jimaku Subs") then
+    if nav.active and #nav.stack > 0 and nav.stack[#nav.stack].title:match("Browse Jimaku Subs") then
         pop_menu()
         show_subtitle_browser()
     else
@@ -847,7 +852,7 @@ end
 
 -- AniList Results Browser (Paginated)
 show_search_results_menu = function()
-    local results = menu_state.search_results
+    local results = browser.search_results
     if not results or #results == 0 then
         mp.osd_message("No search results to display.", 3)
         return
@@ -858,7 +863,7 @@ show_search_results_menu = function()
         local title = media.title.romaji or "Unknown Title"
         local year = media.seasonYear and (" [" .. media.seasonYear .. "]") or ""
         local format = media.format and (" (" .. media.format .. ")") or ""
-        local is_current = (menu_state.current_match and menu_state.current_match.anilist_id == media.id)
+        local is_current = (session.current_match and session.current_match.anilist_id == media.id)
         local prefix = is_current and "✓ " or ""
         return {
             text = string.format("%d. %s%s", display_idx, prefix, title),
@@ -925,14 +930,14 @@ select_anilist_result = function(selected)
     debug_log("User manually selected AniList result: " .. (title_text .. " ID: " .. selected.id))
     
     -- Safety check for parsed_data
-    if not menu_state.parsed_data then
+    if not session.parsed_data then
         debug_log("Error: parsed_data is nil in select_anilist_result", true)
         mp.osd_message("Error: No parsed data available", 3)
         return
     end
     
-    local episode_num = tonumber(menu_state.parsed_data.episode) or 1
-    local season_num = menu_state.parsed_data.season
+    local episode_num = tonumber(session.parsed_data.episode) or 1
+    local season_num = session.parsed_data.season
     
     -- Fix: Call the newly added extract_year and handle nil safely
     local media_title = mp.get_property("media-title") or mp.get_property("filename")
@@ -940,11 +945,11 @@ select_anilist_result = function(selected)
     
     -- smart_match_anilist iteration
     local media, actual_episode, actual_season, seasons, match_method, match_confidence = 
-        smart_match_anilist({selected}, menu_state.parsed_data, episode_num, season_num, file_year)
+        smart_match_anilist({selected}, session.parsed_data, episode_num, season_num, file_year)
     
     -- Update state
-    menu_state.anilist_id = selected.id
-    menu_state.current_match = {
+    session.anilist_id = selected.id
+    session.current_match = {
         title = title_text,
         anilist_id = selected.id,
         episode = actual_episode,
@@ -956,15 +961,15 @@ select_anilist_result = function(selected)
         anilist_entry = selected
     }
     
-    menu_state.seasons_data = seasons
+    session.seasons_data = seasons
     mp.osd_message("Selected: " .. title_text, 3)
     
     -- Trigger subtitle search O(1)
     local jimaku_entry, error_code = search_jimaku_subtitles(selected.id)
     if jimaku_entry then
-        menu_state.jimaku_id = jimaku_entry.id
-        menu_state.jimaku_entry = jimaku_entry
-        menu_state.browser_files = nil -- Reset cache for new ID
+        session.jimaku_id = jimaku_entry.id
+        session.jimaku_entry = jimaku_entry
+        browser.files = nil -- Reset cache for new ID
         
         download_subtitle_smart(
             jimaku_entry.id, 
@@ -1043,7 +1048,7 @@ show_ui_settings_menu = function(selected)
             elseif JIMAKU_ITEMS_PER_PAGE == 6 then JIMAKU_ITEMS_PER_PAGE = 8
             elseif JIMAKU_ITEMS_PER_PAGE == 8 then JIMAKU_ITEMS_PER_PAGE = 10
             else JIMAKU_ITEMS_PER_PAGE = 4 end
-            menu_state.items_per_page = JIMAKU_ITEMS_PER_PAGE
+            browser.items_per_page = JIMAKU_ITEMS_PER_PAGE
             pop_menu(); show_ui_settings_menu(2)
         end},
         {text = "3. Menu Timeout: " .. JIMAKU_MENU_TIMEOUT .. "s", action = function()
@@ -1097,7 +1102,7 @@ show_preferred_groups_menu = function(selected)
     table.insert(items, {text = "0. Back to Preferences", action = pop_menu})
     
     local on_left = function()
-        local idx = menu_state.stack[#menu_state.stack].selected
+        local idx = nav.stack[#nav.stack].selected
         if idx > 1 and idx <= #JIMAKU_PREFERRED_GROUPS then
             local temp = JIMAKU_PREFERRED_GROUPS[idx]
             JIMAKU_PREFERRED_GROUPS[idx] = JIMAKU_PREFERRED_GROUPS[idx-1]
@@ -1108,7 +1113,7 @@ show_preferred_groups_menu = function(selected)
     end
     
     local on_right = function()
-        local idx = menu_state.stack[#menu_state.stack].selected
+        local idx = nav.stack[#nav.stack].selected
         if idx >= 1 and idx < #JIMAKU_PREFERRED_GROUPS then
             local temp = JIMAKU_PREFERRED_GROUPS[idx]
             JIMAKU_PREFERRED_GROUPS[idx] = JIMAKU_PREFERRED_GROUPS[idx+1]
@@ -2666,8 +2671,8 @@ function download_subtitle_smart(entry_id, target_episode, target_season, season
                 debug_log(string.format("Successfully loaded subtitle [%d/%d] (%s): %s", 
                     i, max_downloads, load_flag, subtitle_file.name))
                 -- Update menu state tracking for regular files
-                table.insert(menu_state.loaded_subs_files, subtitle_file.name)
-                menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+                table.insert(browser.loaded_subs_files, subtitle_file.name)
+                browser.loaded_subs_count = browser.loaded_subs_count + 1
                 success_count = success_count + 1
             end
         else
@@ -3130,14 +3135,14 @@ end
 handle_archive_file = function(archive_path, default_flag)
     debug_log("Handling archive: " .. archive_path)
     -- Get context about what we're looking for
-    local target_title = menu_state.current_match and menu_state.current_match.title or 
-                        menu_state.parsed_data and menu_state.parsed_data.title or
+    local target_title = session.current_match and session.current_match.title or 
+                        session.parsed_data and session.parsed_data.title or
                         "Unknown"
-    local target_episode = menu_state.current_match and menu_state.current_match.episode or
-                          menu_state.parsed_data and tonumber(menu_state.parsed_data.episode) or
+    local target_episode = session.current_match and session.current_match.episode or
+                          session.parsed_data and tonumber(session.parsed_data.episode) or
                           1
-    local target_season = menu_state.current_match and menu_state.current_match.season or
-                         menu_state.parsed_data and menu_state.parsed_data.season or
+    local target_season = session.current_match and session.current_match.season or
+                         session.parsed_data and session.parsed_data.season or
                          1
     debug_log(string.format("Archive filtering context: Title='%s', Season=%s, Episode=%s", 
         target_title, target_season or "nil", target_episode))
@@ -3187,7 +3192,7 @@ handle_archive_file = function(archive_path, default_flag)
         end)
         if success then
             loaded_count = loaded_count + 1
-            table.insert(menu_state.loaded_subs_files, sub_info.name)
+            table.insert(browser.loaded_subs_files, sub_info.name)
         else
             debug_log(string.format("Failed to load subtitle: %s (%s)", sub_info.name, err), true)
         end
@@ -3202,7 +3207,7 @@ handle_archive_file = function(archive_path, default_flag)
             msg = msg .. string.format("\n(%d failed to load)", files_to_load - loaded_count)
         end
         mp.osd_message(msg, 4)
-        menu_state.loaded_subs_count = menu_state.loaded_subs_count + loaded_count
+        browser.loaded_subs_count = browser.loaded_subs_count + loaded_count
         update_loaded_subs_list()  -- Refresh the loaded subs list
         return true
     else
@@ -3214,17 +3219,17 @@ end
 -- New helper to track currently loaded subtitles from track-list
 update_loaded_subs_list = function()
     local tracks = mp.get_property_native("track-list")
-    menu_state.loaded_subs_files = {}
-    menu_state.loaded_subs_count = 0
+    browser.loaded_subs_files = {}
+    browser.loaded_subs_count = 0
     for _, track in ipairs(tracks) do
         if track.type == "sub" and track.external then
             -- Use filename from path
             local filename = track.external_filename or track.title or track.id
-            table.insert(menu_state.loaded_subs_files, filename)
-            menu_state.loaded_subs_count = menu_state.loaded_subs_count + 1
+            table.insert(browser.loaded_subs_files, filename)
+            browser.loaded_subs_count = browser.loaded_subs_count + 1
         end
     end
-    debug_log("Loaded subs updated from track-list: " .. menu_state.loaded_subs_count)
+    debug_log("Loaded subs updated from track-list: " .. browser.loaded_subs_count)
 end
 -------------------------------------------------------------------------------
 -- ULTRA SIMPLE MANUAL SEARCH
@@ -3276,15 +3281,15 @@ local search_url = string.format("%s/entries/search?anime=true&query=%s", JIMAKU
                 text = string.format("%d. %s", i - start_idx + 1, entry.name),
                 hint = entry.anilist_id and ("ID: " .. entry.anilist_id) or "No AniList",
                 action = function()
-                    menu_state.jimaku_id = entry.id
-                    menu_state.jimaku_entry = entry
-                    menu_state.current_match = { 
+                    session.jimaku_id = entry.id
+                    session.jimaku_entry = entry
+                    session.current_match = { 
                         title = entry.name, 
                         anilist_id = entry.anilist_id, 
                         episode = 1, 
                         season = 1 
                     }
-                    menu_state.browser_files = nil
+                    browser.files = nil
                     -- 1. Remove the search results from the stack
                     pop_menu() 
                     -- 2. Open the browser (it will now be on top of the Search/Main menu)
@@ -3795,7 +3800,7 @@ search_local_subtitle_cache = function(parsed, is_auto, anilist_id)
         local success = pcall(function() mp.commandv("sub-add", sub.path, flag) end)
         if success then
             loaded_count = loaded_count + 1
-            table.insert(menu_state.loaded_subs_files, sub.name)
+            table.insert(browser.loaded_subs_files, sub.name)
         end
     end
 
@@ -3919,7 +3924,7 @@ search_anilist = function(is_auto)
         debug_log(string.format("Search: Processing %d potential matches...", #results))
         
         -- Store all results for manual selection in "Pick from Results" menu
-        menu_state.search_results = results
+        browser.search_results = results
         
         local selected, actual_ep, actual_sea, seasons, match_method, confidence = 
             smart_match_anilist(results, parsed, tonumber(parsed.episode) or 1, parsed.season, extract_year(title_source))
@@ -3928,8 +3933,8 @@ search_anilist = function(is_auto)
             debug_log(string.format("Match Found: %s (ID: %s) | Conf: %s | Method: %s", 
                 selected.title.romaji, selected.id, tostring(confidence), tostring(match_method)))
 
-            menu_state.anilist_id = selected.id
-            menu_state.current_match = {
+            session.anilist_id = selected.id
+            session.current_match = {
                 title = selected.title.romaji, 
                 anilist_id = selected.id,
                 episode = actual_ep, 
@@ -3938,10 +3943,11 @@ search_anilist = function(is_auto)
                 total_episodes = selected.episodes, 
                 anilist_entry = selected
             }
-            -- Store seasons data at menu_state level so the subtitle browser
+            -- Store seasons data at session level so the subtitle browser
             -- can access it later for cumulative episode jumping
-            menu_state.seasons_data = seasons
-            menu_state.parsed_data = parsed
+            -- can access it later for cumulative episode jumping
+            session.seasons_data = seasons
+            session.parsed_data = parsed
 
             conditional_osd(string.format("Match: %s\nS%d E%d | %s", 
                 selected.title.romaji, actual_sea, actual_ep, selected.format or "TV"), 5, is_auto)
@@ -3951,8 +3957,8 @@ search_anilist = function(is_auto)
             local jimaku_entry, error_code = search_jimaku_subtitles(selected.id)
             if jimaku_entry then
                 debug_log("Jimaku: Found entry " .. jimaku_entry.id .. ". Starting download...")
-                menu_state.jimaku_id = jimaku_entry.id
-                menu_state.jimaku_entry = jimaku_entry
+                session.jimaku_id = jimaku_entry.id
+                session.jimaku_entry = jimaku_entry
                 download_subtitle_smart(jimaku_entry.id, actual_ep, actual_sea, seasons, selected, is_auto)
             elseif error_code == "MISSING_KEY" then
                 conditional_osd(API_KEY_ERROR_MSG, 3, is_auto)
@@ -4018,7 +4024,7 @@ mp.register_script_message("jimaku-set-groups", function(input)
         mp.osd_message(string.format("Added %d new group(s)", added_count), 3)
         
         -- Refresh the menu if it's currently open
-        if menu_state.active and menu_state.stack[#menu_state.stack].title == "Release Group Priority" then
+        if nav.active and nav.stack[#nav.stack].title == "Release Group Priority" then
             pop_menu()
             show_preferred_groups_menu()
         end
@@ -4038,7 +4044,7 @@ if not STANDALONE_MODE then
     mp.add_key_binding("alt+a", "jimaku-menu", show_main_menu)
 
     mp.register_event("file-loaded", function()
-        menu_state.current_match, menu_state.jimaku_id, menu_state.browser_files = nil, nil, nil
+        session.current_match, session.jimaku_id, browser.files = nil, nil, nil
         update_loaded_subs_list()
         if JIMAKU_AUTO_DOWNLOAD then 
             mp.add_timeout(0.5, function() search_anilist(true) end) 
