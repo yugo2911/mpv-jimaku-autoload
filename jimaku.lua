@@ -2339,8 +2339,24 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     end
 
     -- Parse all filenames and build episode map
+    local is_movie = anilist_entry and anilist_entry.format == "MOVIE"
     for _, file in ipairs(files) do
         local jimaku_season, jimaku_episode = parse_jimaku_filename(file.name)
+        
+        -- For movies: match based on title if no episode number
+        if is_movie and not jimaku_episode then
+            local title_match = subtitle_matches_title(file.name, title_variations)
+            if title_match then
+                table.insert(matches, {
+                    file = file,
+                    confidence = "medium",
+                    match_type = "movie_title_match",
+                    priority_score = calculate_priority_score(file.name)
+                })
+            end
+            goto next_file
+        end
+        
         if jimaku_episode then
             local anilist_episode = nil
             local match_type = ""
