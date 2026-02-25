@@ -30,9 +30,6 @@ JIMAKU_API_KEY = (script_opts.jimaku_api_key and script_opts.jimaku_api_key ~= "
 LOG_FILE           = script_opts.LOG_FILE and CONFIG_DIR .. "/jimaku.log" or nil
 PARSER_LOG_FILE    = CONFIG_DIR .. "/parser-debug.log"
 TEST_FILE          = CONFIG_DIR .. "/data/torrents.txt"
-ANILIST_CACHE_FILE = CONFIG_DIR .. "/cache/anilist-cache.json"
-JIMAKU_CACHE_FILE  = CONFIG_DIR .. "/cache/jimaku-cache.json"
-PREFERRED_GROUPS_FILE = CONFIG_DIR .. "/cache/preferred-groups.json"
 SUBTITLE_CACHE_DIR = script_opts.SUBTITLE_CACHE_DIR
 -- Strip potential quotes from user config (common user error in conf files)
 if SUBTITLE_CACHE_DIR then
@@ -44,6 +41,13 @@ if not SUBTITLE_CACHE_DIR:match("^/") and not SUBTITLE_CACHE_DIR:match("^%a:") t
         SUBTITLE_CACHE_DIR = CONFIG_DIR .. "/" .. SUBTITLE_CACHE_DIR:gsub("^./", "")
     end
 end
+
+-- Store caches alongside subtitles (same directory)
+ANILIST_CACHE_FILE = SUBTITLE_CACHE_DIR .. "/anilist-cache.json"
+JIMAKU_CACHE_FILE  = SUBTITLE_CACHE_DIR .. "/jimaku-cache.json"
+PREFERRED_GROUPS_FILE = SUBTITLE_CACHE_DIR .. "/preferred-groups.json"
+INDEX_FILE         = SUBTITLE_CACHE_DIR .. "/sub_index.json"
+
 LOG_ONLY_ERRORS      = script_opts.LOG_ONLY_ERRORS
 JIMAKU_MAX_SUBS      = script_opts.JIMAKU_MAX_SUBS
 JIMAKU_AUTO_DOWNLOAD = script_opts.JIMAKU_AUTO_DOWNLOAD
@@ -152,7 +156,6 @@ end
 -------------------------------------------------------------------------------
 -- INDEXING UTILITIES
 -------------------------------------------------------------------------------
-local INDEX_FILE = CONFIG_DIR .. "/cache/sub_index.json"
 
 local function count_table_entries(tbl)
     if not tbl or type(tbl) ~= "table" then return 0 end
