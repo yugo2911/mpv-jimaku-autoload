@@ -964,27 +964,23 @@ select_anilist_result = function(selected)
     session.seasons_data = seasons
     mp.osd_message("Selected: " .. title_text, 3)
     
-    -- Trigger subtitle search O(1)
+    -- Search Jimaku for this entry
     local jimaku_entry, error_code = search_jimaku_subtitles(selected.id)
     if jimaku_entry then
         session.jimaku_id = jimaku_entry.id
         session.jimaku_entry = jimaku_entry
         browser.files = nil -- Reset cache for new ID
         
-        download_subtitle_smart(
-            jimaku_entry.id, 
-            actual_episode, 
-            actual_season,
-            seasons,
-            selected
-        )
+        -- Show browser instead of auto-downloading
+        close_menu()
+        show_subtitle_browser()
     elseif error_code == "MISSING_KEY" then
         mp.osd_message(API_KEY_ERROR_MSG, 3)
+        close_menu()
     else
         mp.osd_message("No Jimaku entry found for this show.", 3)
+        close_menu()
     end
-    
-    close_menu()
 end
 
 -------------------------------------------------------------------------------
