@@ -3544,6 +3544,14 @@ search_anilist = function(is_auto)
         return 
     end
 
+    -- CHECK LOCAL CACHE FIRST - before hitting APIs
+    debug_log("Search: Checking local cache first...")
+    if search_local_subtitle_cache(parsed, is_auto) then
+        debug_log("Search: Found local subs, skipping API calls")
+        return
+    end
+    debug_log("Search: No local subs found, continuing to APIs...")
+
     local search_title = get_search_title(parsed)
     local cache_key = search_title:lower()
 
@@ -3676,7 +3684,14 @@ search_anilist = function(is_auto)
             debug_log("Jimaku: Searching subtitles for AniList ID " .. selected.id)
             local jimaku_entry, error_code = search_jimaku_subtitles(selected.id)
             if jimaku_entry then
-                debug_log("Jimaku: Found entry " .. jimaku_entry.id .. ". Starting download...")
+                -- Check local cache before downloading from Jimaku
+                debug_log("Jimaku: Found entry, checking local cache before download...")
+                if search_local_subtitle_cache(parsed, is_auto, selected.id) then
+                    debug_log("Jimaku: Found local subs, skipping download")
+                    return
+                end
+                
+                debug_log("Jimaku: No local subs found, downloading from Jimaku...")
                 session.jimaku_id = jimaku_entry.id
                 session.jimaku_entry = jimaku_entry
                 download_subtitle_smart(jimaku_entry.id, actual_ep, actual_sea, seasons, selected, is_auto)
