@@ -1947,15 +1947,7 @@ local function parse_media_title(filename)
     result.title = result.title:gsub("^%-+%s*", "")  -- Remove leading dashes
     result.title = result.title:gsub("%s+", " ")     -- Normalize spaces
     result.title = result.title:gsub("^%s+", ""):gsub("%s+$", "")  -- Trim
-    if not result.episode then
-        if result.is_movie then
-            result.episode = "1"  -- Movies are episode 1
-            debug_log("Movie detected - setting episode to 1")
-        else
-            result.episode = "1"  -- Default
-            result.confidence = "failed"
-        end
-    end
+    -- Don't assign episode when not found - let matching logic handle nil
     -- Validate episode number (UPDATED for high episodes)
     local ep_num = tonumber(result.episode)
     if ep_num then
