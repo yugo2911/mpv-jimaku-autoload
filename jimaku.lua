@@ -3466,7 +3466,7 @@ function smart_match_anilist(results, parsed, episode_num, season_num, file_year
     end
     match_method = "default"
     match_confidence = "low"
-    debug_log("Using default match (first search result) - LOW CONFIDENCE")
+    debug_log("Using default match (first search result)")
     return selected, actual_episode, actual_season, seasons, match_method, match_confidence
 end
 
@@ -3661,8 +3661,8 @@ search_anilist = function(is_auto)
             smart_match_anilist(results, parsed, tonumber(parsed.episode) or 1, parsed.season, extract_year(title_source))
 
         if selected then
-            debug_log(string.format("Match Found: %s (ID: %s) | Conf: %s | Method: %s", 
-                selected.title.romaji, selected.id, tostring(confidence), tostring(match_method)))
+            debug_log(string.format("Match Found: %s (ID: %s)", 
+                selected.title.romaji, selected.id))
 
             session.anilist_id = selected.id
             session.current_match = {
