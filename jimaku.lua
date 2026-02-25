@@ -149,65 +149,6 @@ debug_log = function(message, is_error)
     end
 end
 
--------------------------------------------------------------------------------
--- Async State
--------------------------------------------------------------------------------
-local async_state = { 
-    pending_requests = {}, 
-    request_id_counter = 0, 
-    task_queue = {}, 
-    group_set = nil 
-}
-
-local function create_promise(fn, callback)
-    local id = async_state.request_id_counter + 1
-    async_state.request_id_counter = id
-    async_state.pending_requests[id] = true
-    mp.add_timeout(0, function()
-        if not async_state.pending_requests[id] then return end
-        local ok, res = pcall(fn)
-        if async_state.pending_requests[id] then
-            async_state.pending_requests[id] = nil
-            callback(ok, res)
-        end
-    end)
-    return id
-end
-
-local function cancel_promise(id) 
-    if id then async_state.pending_requests[id] = nil end 
-end
-
-local function queue_deferred_task(fn, priority)
-    table.insert(async_state.task_queue, { 
-        fn = fn, 
-        priority = priority or 999, 
-        created = os.time() 
-    })
-    table.sort(async_state.task_queue, function(a,b) return a.priority < b.priority end)
-end
-
-local function process_next_deferred_task()
-    if #async_state.task_queue == 0 then return end
-    local task = table.remove(async_state.task_queue, 1)
-    local ok, err = pcall(task.fn)
-    if not ok then debug_log("Deferred task error: "..tostring(err), true) end
-end
-
-local function rebuild_group_set()
-    async_state.group_set = {}
-    if JIMAKU_PREFERRED_GROUPS then
-        for _,g in ipairs(JIMAKU_PREFERRED_GROUPS) do
-            if g.enabled then async_state.group_set[g.name:lower()] = true end
-        end
-    end
-end
-
-local function is_group_preferred_fast(name)
-    if not async_state.group_set then rebuild_group_set() end
-    return async_state.group_set[name:lower()] == true
-end
-
 local function save_persistent_cache(path, data)
     debug_log("Cache: Saving to " .. path)
     if not utils then return end
@@ -243,39 +184,6 @@ local function load_persistent_cache(path)
     return {}
 end
 
-local function run_subprocess(args, parse_json)
-    local res = mp.command_native({ 
-        name="subprocess", 
-        capture_stdout=true, 
-        playback_only=false, 
-        args=args 
-    })
-    if res.status ~= 0 or not res.stdout then return nil end
-    if parse_json then
-        local ok, data = pcall(utils.parse_json, res.stdout)
-        return ok and data or nil
-    end
-    return res.stdout
-end
-
-local function make_anilist_request_async(query, variables, callback)
-    return create_promise(function()
-        local body = utils.format_json({ query = query, variables = variables })
-        local args = { "curl","-s","-X","POST","-m","5","-H","Content-Type: application/json","-H","Accept: application/json","--data", body, ANILIST_API_URL }
-        local data = run_subprocess(args, true)
-        if not data or data.errors then return nil end
-        return data.data
-    end, callback)
-end
-
-local function make_jimaku_request_async(path, callback)
-    return create_promise(function()
-        local args = { "curl","-s","-m","5", JIMAKU_API_URL .. path }
-        return run_subprocess(args, true)
-    end, callback)
-end
-
--- Synchronous version for backwards compatibility (DEPRECATED: use async version instead)
 -- Load preferred groups from cache or use defaults
 local function load_preferred_groups()
     local cached = load_persistent_cache(PREFERRED_GROUPS_FILE)
