@@ -1947,7 +1947,15 @@ local function parse_media_title(filename)
     result.title = result.title:gsub("^%-+%s*", "")  -- Remove leading dashes
     result.title = result.title:gsub("%s+", " ")     -- Normalize spaces
     result.title = result.title:gsub("^%s+", ""):gsub("%s+$", "")  -- Trim
-    -- Don't assign episode when not found - let matching logic handle nil
+    if not result.episode then
+        if result.is_movie then
+            result.episode = "1"  -- Movies are episode 1
+            debug_log("Movie detected - setting episode to 1")
+        else
+            result.episode = "1"  -- Default
+            result.confidence = "failed"
+        end
+    end
     -- Validate episode number (UPDATED for high episodes)
     local ep_num = tonumber(result.episode)
     if ep_num then
@@ -2331,24 +2339,8 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     end
 
     -- Parse all filenames and build episode map
-    local is_movie = anilist_entry and anilist_entry.format == "MOVIE"
     for _, file in ipairs(files) do
         local jimaku_season, jimaku_episode = parse_jimaku_filename(file.name)
-        
-        -- For movies: match based on title if no episode number
-        if is_movie and not jimaku_episode then
-            local title_match = subtitle_matches_title(file.name, title_variations)
-            if title_match then
-                table.insert(matches, {
-                    file = file,
-                    confidence = "medium",
-                    match_type = "movie_title_match",
-                    priority_score = calculate_priority_score(file.name)
-                })
-            end
-            goto next_file
-        end
-        
         if jimaku_episode then
             local anilist_episode = nil
             local match_type = ""
