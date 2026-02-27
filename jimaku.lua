@@ -1458,6 +1458,13 @@ parse_jimaku_filename = function(filename)
         {"%s(%d+)%s+[Ww]eb[%s%.]", "episode"},          -- " 01 Web "
         {"%-%s*(%d+)%s*[%[(]", "episode"},              -- "- 01 ["
         {"%s(%d+)%s*%[", "episode"},                     -- " 01 ["
+        -- Handle episode with version suffix like "07v2"
+        {"%-%s*(%d+)v%d+%.[AaSs]", "episode"},          -- "- 07v2.ass" (directly before ext)
+        {"%-%s*(%d+)v%d+%s+[^%w%d]", "episode"},        -- "- 07v2 (Text" (with text after)
+        {"%s(%d+)v%d+%.[AaSs]", "episode"},              -- " 07v2.ass"
+        -- Handle episode followed by space and text like "07 (TBS"
+        {"%-%s*(%d+)%s+[^%w%d]", "episode"},             -- "- 07 (Text" (non-word after space)
+        {"%s(%d+)%s+[^%w%d]", "episode"},               -- " 07 (Text"
         -- Track patterns (low priority - uncommon)
         {"track(%d+)", "episode"},
         -- Underscore patterns
@@ -2505,7 +2512,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     if #matches == 0 then
         debug_log(string.format("No matches found for S%d E%d (cumulative: %d). Parsed episodes:", 
             anilist_season, target_episode, target_cumulative))
-        for i = 1, math.min(10, #all_parsed) do
+        for i = 1, math.min(50, #all_parsed) do
             local p = all_parsed[i]
             local jimaku_display = p.jimaku_season and string.format("S%dE%d", p.jimaku_season, p.jimaku_episode) 
                                    or string.format("E%d", p.jimaku_episode)
@@ -2516,8 +2523,8 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                 p.title_match and "YES" or "NO",
                 p.match_type ~= "" and p.match_type or "no_patterns_matched"))
         end
-        if #all_parsed > 10 then
-            debug_log(string.format("  ... and %d more files", #all_parsed - 10))
+        if #all_parsed > 50 then
+            debug_log(string.format("  ... and %d more files", #all_parsed - 50))
         end
     else
         debug_log(string.format("Found %d matching file(s), sorted by priority then confidence:", #matches))
