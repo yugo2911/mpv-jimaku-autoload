@@ -1458,6 +1458,13 @@ parse_jimaku_filename = function(filename)
         {"%s(%d+)%s+[Ww]eb[%s%.]", "episode"},          -- " 01 Web "
         {"%-%s*(%d+)%s*[%[(]", "episode"},              -- "- 01 ["
         {"%s(%d+)%s*%[", "episode"},                     -- " 01 ["
+        -- Handle episode with version suffix like "07v2"
+        {"%-%s*(%d+)v%d+%.[AaSs]", "episode"},          -- "- 07v2.ass" (directly before ext)
+        {"%-%s*(%d+)v%d+%s+[^%w%d]", "episode"},        -- "- 07v2 (Text" (with text after)
+        {"%s(%d+)v%d+%.[AaSs]", "episode"},              -- " 07v2.ass"
+        -- Handle episode followed by space and text like "07 (TBS"
+        {"%-%s*(%d+)%s+[^%w%d]", "episode"},             -- "- 07 (Text" (non-word after space)
+        {"%s(%d+)%s+[^%w%d]", "episode"},               -- " 07 (Text"
         -- Track patterns (low priority - uncommon)
         {"track(%d+)", "episode"},
         -- Underscore patterns
