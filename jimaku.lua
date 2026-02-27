@@ -2505,7 +2505,7 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
     if #matches == 0 then
         debug_log(string.format("No matches found for S%d E%d (cumulative: %d). Parsed episodes:", 
             anilist_season, target_episode, target_cumulative))
-        for i = 1, math.min(10, #all_parsed) do
+        for i = 1, math.min(50, #all_parsed) do
             local p = all_parsed[i]
             local jimaku_display = p.jimaku_season and string.format("S%dE%d", p.jimaku_season, p.jimaku_episode) 
                                    or string.format("E%d", p.jimaku_episode)
@@ -2516,8 +2516,8 @@ local function match_episodes_intelligent(files, target_episode, target_season, 
                 p.title_match and "YES" or "NO",
                 p.match_type ~= "" and p.match_type or "no_patterns_matched"))
         end
-        if #all_parsed > 10 then
-            debug_log(string.format("  ... and %d more files", #all_parsed - 10))
+        if #all_parsed > 50 then
+            debug_log(string.format("  ... and %d more files", #all_parsed - 50))
         end
     else
         debug_log(string.format("Found %d matching file(s), sorted by priority then confidence:", #matches))
