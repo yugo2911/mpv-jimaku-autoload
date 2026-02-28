@@ -1465,6 +1465,9 @@ parse_jimaku_filename = function(filename)
         -- Handle episode followed by space and text like "07 (TBS"
         {"%-%s*(%d+)%s+[^%w%d]", "episode"},             -- "- 07 (Text" (non-word after space)
         {"%s(%d+)%s+[^%w%d]", "episode"},               -- " 07 (Text"
+        -- Handle episode suffix like "12 END", "12 FIN", "12 Final"
+        {"%-%s*(%d+)%s+[A-Za-z]+%s", "episode"},         -- "- 12 END " (letters + space)
+        {"%s(%d+)%s+[A-Za-z]+%s", "episode"},            -- " 12 END " (same without dash)
         -- Track patterns (low priority - uncommon)
         {"track(%d+)", "episode"},
         -- Underscore patterns
