@@ -17,7 +17,7 @@ local script_opts = {
     USE_ANILIST_API      = true,
     USE_JIMAKU_API       = true
 }
--- 2. DETERMINE PATHS
+-- 2. DETERMINE PATHS 
 CONFIG_DIR = STANDALONE_MODE and "." or mp.command_native({"expand-path", "~~/"})
 -- 3. LOAD OPTIONS FROM FILE
 if not STANDALONE_MODE then
