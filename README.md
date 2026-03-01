@@ -53,4 +53,4 @@ Alt + A to open up the menu, [theme is ModernZ](https://github.com/Samillion/Mod
    └── Browse, search, manage subtitles
 ```
 > [!NOTE]
-> Mostly works.. still some options are still wip
+> Mostly works.. some things are still wip
