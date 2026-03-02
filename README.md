@@ -12,18 +12,20 @@ JIMAKU_ITEMS_PER_PAGE=8
 JIMAKU_MENU_TIMEOUT=15
 JIMAKU_FONT_SIZE=16
 JIMAKU_HIDE_SIGNS=no
-INITIAL_OSD_MESSAGES=yes
+INITIAL_OSD_MESSAGES=no
 LOG_FILE=no
 ```
 **Get API key:** [jimaku.cc](https://jimaku.cc)
 
-> MPV default path location, if folders script-opts or scripts are missing u need to create them manually
-* **Windows:** `%APPDATA%\mpv\scripts\`
-* **Linux/macOS:** `~/.config/mpv/scripts/`
+> If script-opts or scripts folders are missing u need to create them manually in mpv folder
 ```
-mpv/
- ┣━ scripts/ ━━━━━━ jimaku.lua
- ┗━ script-opts/ ━━ jimaku.conf
+[OS Root]
+ └── mpv/
+     ├── scripts/ ─────── jimaku.lua
+     └── script-opts/ ─── jimaku.conf
+
+Windows: %APPDATA%\mpv\
+Unix:    ~/.config/mpv/
 ```
 | Keybind | Action |
 | :--- | :--- |
