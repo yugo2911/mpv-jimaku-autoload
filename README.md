@@ -16,11 +16,15 @@ INITIAL_OSD_MESSAGES=yes
 LOG_FILE=no
 ```
 **Get API key:** [jimaku.cc](https://jimaku.cc)
->Note
-MPV default path location, if there is no folders just create them and place the files
+
+> MPV default path location, if folders script-opts or scripts are missing u need to create them manually and place jimaku.conf to \script-opts and jimaku.lua to \scripts folder
 * **Windows:** `%APPDATA%\mpv\scripts\`
 * **Linux/macOS:** `~/.config/mpv/scripts/`
-
+```
+mpv/
+ ┣━ scripts/ ━━━━━━ jimaku.lua
+ ┗━ script-opts/ ━━ jimaku.conf
+```
 | Keybind | Action |
 | :--- | :--- |
 | `Shift` + `A` |  Search & Download |
@@ -57,4 +61,4 @@ MPV default path location, if there is no folders just create them and place the
    └── Browse, search, manage subtitles
 ```
 > [!NOTE]
-> Mostly works.. some things are still wip
+> Mostly works..
