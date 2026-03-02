@@ -48,7 +48,7 @@ Alt + A to open up the menu, [theme is ModernZ](https://github.com/Samillion/Mod
    │
 9. LOAD into mpv as subtitles
    │
-10. MENU ACCESS (Alt+A)
+10.MENU ACCESS (Alt+A)
    │
    └── Browse, search, manage subtitles
 ```
