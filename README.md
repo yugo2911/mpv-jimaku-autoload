@@ -17,7 +17,7 @@ LOG_FILE=no
 ```
 **Get API key:** [jimaku.cc](https://jimaku.cc)
 
-> MPV default path location, if folders script-opts or scripts are missing u need to create them manually and place jimaku.conf to \script-opts and jimaku.lua to \scripts folder
+> MPV default path location, if folders script-opts or scripts are missing u need to create them manually
 * **Windows:** `%APPDATA%\mpv\scripts\`
 * **Linux/macOS:** `~/.config/mpv/scripts/`
 ```
