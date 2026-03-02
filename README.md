@@ -21,7 +21,11 @@ MPV default path location, if there is no folders just create them and place the
 * **Windows:** `%APPDATA%\mpv\scripts\`
 * **Linux/macOS:** `~/.config/mpv/scripts/`
 
-Alt + A to open up the menu, [theme is ModernZ](https://github.com/Samillion/ModernZ)
+| Keybind | Action |
+| :--- | :--- |
+| `Shift` + `A` |  Search & Download |
+| `Alt` + `A` | Open Menu |
+
 <img width="1024" height="576" alt="image" src="https://github.com/user-attachments/assets/4b411f18-5432-432a-9b29-f611f3da23dc" />
 
 ```
